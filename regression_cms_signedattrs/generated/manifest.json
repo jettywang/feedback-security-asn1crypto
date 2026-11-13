@@ -1,0 +1,218 @@
+[
+  {
+    "basis": "RFC 5652 5.3/11.1: required attributes present once, single valued, bound to data.",
+    "control_for": null,
+    "der_file": "valid_baseline.der",
+    "der_size": 1394,
+    "description": "Ordinary SignedData with content-type, message-digest and signing-time.",
+    "expected_codes": [],
+    "expected_status": "accepted",
+    "id": "valid_baseline",
+    "kind": "valid",
+    "sha256_der": "744287f53f7175f4ef669621c919d9906cd790529567da64dc80d5dfaee52cb0"
+  },
+  {
+    "basis": "RFC 5652 11.3: SignedAttributes MUST NOT include duplicate attrType instances.",
+    "control_for": null,
+    "der_file": "dup_content_type.der",
+    "der_size": 1421,
+    "description": "Two content-type attribute occurrences in signedAttrs.",
+    "expected_codes": [
+      "duplicate_attr_type"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "dup_content_type",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "a58404f9cc6b3630a352be3ae88839b70ff3f400faee62d7a88a93a770a1d84e",
+    "single_change": "append a second, identical content-type attribute to valid_baseline."
+  },
+  {
+    "basis": "RFC 5652 11.3: duplicate attrType is forbidden; ambiguity over which digest binds.",
+    "der_file": "dup_message_digest.der",
+    "der_size": 1444,
+    "description": "Two message-digest attribute occurrences in signedAttrs.",
+    "expected_codes": [
+      "duplicate_attr_type"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "dup_message_digest",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "a4aab2f371f5e44e11c96da7ca6a146e63cf1b3c230aa53237acb817f55abd78",
+    "single_change": "append a second, identical message-digest attribute to valid_baseline."
+  },
+  {
+    "basis": "RFC 5652 11.2: content-type attribute has a single content-type value.",
+    "der_file": "multi_value_content_type.der",
+    "der_size": 1405,
+    "description": "One content-type attribute carrying two values in its SET.",
+    "expected_codes": [
+      "multi_value_attribute"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "multi_value_content_type",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "58bf865010c4fce044ad7f59cc0c5e334fb15d2e98b8ea7d1c1a332947471dcc",
+    "single_change": "put two OID values in the content-type value SET instead of one."
+  },
+  {
+    "basis": "RFC 5652 11.2: message-digest attribute has a single Digest value.",
+    "der_file": "multi_value_message_digest.der",
+    "der_size": 1429,
+    "description": "One message-digest attribute carrying two octet-string values.",
+    "expected_codes": [
+      "multi_value_attribute"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "multi_value_message_digest",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "72396a28a41ebe8d5ecbf4e07f897a5a355c7122dff73323cfc9564512d7c1c9",
+    "single_change": "put two digest octet strings in the message-digest value SET."
+  },
+  {
+    "basis": "RFC 5652 5.3: content-type is required when SignedAttributes is present.",
+    "der_file": "missing_content_type.der",
+    "der_size": 1368,
+    "description": "SignedAttributes present but the mandatory content-type attribute is removed.",
+    "expected_codes": [
+      "missing_required_attribute"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "missing_content_type",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "ca594e19c4fd72298582abe7fbdd1984e42c76fcab04934376c6df9f2dd7df61",
+    "single_change": "delete the single content-type attribute from valid_baseline."
+  },
+  {
+    "basis": "RFC 5652 5.3: message-digest is required when SignedAttributes is present.",
+    "der_file": "missing_message_digest.der",
+    "der_size": 1345,
+    "description": "SignedAttributes present but the mandatory message-digest attribute is removed.",
+    "expected_codes": [
+      "missing_required_attribute"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "missing_message_digest",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "a63a3a9cf624860292f58dc79c6261c6361abadfcdda3ba9fc97509eb4d461ea",
+    "single_change": "delete the single message-digest attribute from valid_baseline."
+  },
+  {
+    "basis": "RFC 5652 5.3: signed content-type MUST equal encapContentInfo eContentType.",
+    "der_file": "content_type_mismatch.der",
+    "der_size": 1396,
+    "description": "signed content-type claims TSTInfo while eContentType is id-data.",
+    "expected_codes": [
+      "content_type_econtent_type_mismatch"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "content_type_mismatch",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "377282a5f68e6a31707740a1bac027cba45ce891d22d0b3ee28059af3796e2c2",
+    "single_change": "change only the signed content-type OID, leave encapContentInfo as data."
+  },
+  {
+    "basis": "RFC 5652 5.4: message-digest must be the digest of the encapsulated content.",
+    "der_file": "digest_mismatch.der",
+    "der_size": 1394,
+    "description": "message-digest does not match the digest of eContent.",
+    "expected_codes": [
+      "message_digest_payload_mismatch"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "digest_mismatch",
+    "kind": "negative",
+    "legal_control": "valid_baseline",
+    "sha256_der": "00fa32e16ab4fc2035d76a9128de9b8431d32094454477218d9a8d4d8f81c5ed",
+    "single_change": "flip one byte of the message-digest value; payload is untouched."
+  },
+  {
+    "basis": "RFC 5652 11.4: countersignature is an unsigned attribute of the SignerInfo.",
+    "der_file": "countersignature_in_signed_attrs.der",
+    "der_size": 2599,
+    "description": "Countersignature attribute placed inside signedAttrs.",
+    "expected_codes": [
+      "countersignature_must_be_unsigned"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "countersignature_in_signed_attrs",
+    "kind": "negative",
+    "legal_control": "valid_countersignature",
+    "sha256_der": "707e583321476e9d82a0da0f89fabb6e91b88d60fbb46995c02707323ccda9c5",
+    "single_change": "relocate the same countersignature attribute from unsigned to signed."
+  },
+  {
+    "basis": "RFC 5652 11.4: multiple countersignature attributes are the exception to 11.3.",
+    "control_purpose": "guards against over-broad duplicate-attr rejection on countersignatures.",
+    "der_file": "dup_countersignature_attr.der",
+    "der_size": 2994,
+    "description": "Two countersignature unsigned attributes (allowed by RFC 5652 11.4).",
+    "expected_codes": [],
+    "expected_status": "accepted",
+    "id": "dup_countersignature_attr",
+    "kind": "valid",
+    "sha256_der": "881faea29340890442c25b3e84a9e02a3be8f6590127ae35ee71bc390a2d1f96"
+  },
+  {
+    "basis": "RFC 5652 11.4: countersigner SignedAttributes exclude content-type.",
+    "der_file": "countersigner_has_content_type.der",
+    "der_size": 2659,
+    "description": "Countersigner SignedAttributes include a content-type attribute.",
+    "expected_codes": [
+      "countersigner_forbidden_signed_attr"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "countersigner_has_content_type",
+    "kind": "negative",
+    "legal_control": "valid_countersignature",
+    "sha256_der": "05b66c353211e492c42d8731d161afdc224a101c518fdd22156ec8307852d9ac",
+    "single_change": "add a content-type attribute to the countersigner signedAttrs."
+  },
+  {
+    "basis": "RFC 5652 11.4: countersigner SignedAttributes exclude message-digest.",
+    "der_file": "countersigner_has_message_digest.der",
+    "der_size": 2682,
+    "description": "Countersigner SignedAttributes include a message-digest attribute.",
+    "expected_codes": [
+      "countersigner_forbidden_signed_attr"
+    ],
+    "expected_status": "rejected_structure",
+    "id": "countersigner_has_message_digest",
+    "kind": "negative",
+    "legal_control": "valid_countersignature",
+    "sha256_der": "27d0dcfe0a19222efa019155e8797c706fd8826066e47b58ad70d2ba7c1e249e",
+    "single_change": "add a (correct) message-digest attribute to the countersigner signedAttrs."
+  },
+  {
+    "basis": "RFC 5652 11.4: countersignature is computed over the parent signature value; local digest binding rejects an otherwise structurally valid SignerInfo.",
+    "der_file": "countersigner_binds_econtent.der",
+    "der_size": 2601,
+    "description": "Countersignature signature digests eContent, not the parent signature.",
+    "expected_codes": [
+      "message_digest_payload_mismatch"
+    ],
+    "expected_status": "rejected_signature",
+    "id": "countersigner_binds_econtent",
+    "kind": "negative",
+    "legal_control": "valid_countersignature",
+    "sha256_der": "c929e32d2b685e3e4b85957437c8812eaf07f63362c697502c4b51c98981b860",
+    "single_change": "sign the payload bytes instead of the parent signature octets."
+  },
+  {
+    "basis": "RFC 5652 11.4: signature over the parent signature octets; digest recovered for binding.",
+    "der_file": "valid_countersignature.der",
+    "der_size": 2601,
+    "description": "Legal countersignature: unsigned, no content-type/message-digest, binds parent signature.",
+    "expected_codes": [],
+    "expected_status": "accepted",
+    "id": "valid_countersignature",
+    "kind": "valid",
+    "sha256_der": "4a118ac05cec586c7bd88977972583a07971f14a0fac8f501b1d84fec34844b8"
+  }
+]

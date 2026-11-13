@@ -7,7 +7,7 @@ import zlib
 import sys
 from datetime import datetime
 
-from asn1crypto import cms, util
+from asn1crypto import cms, core, keys, util, x509
 from ._unittest_compat import patch
 
 patch()
@@ -1039,3 +1039,699 @@ class CMSTests(unittest.TestCase):
             'recipient_key_id',
             old_sekp.name,
         )
+
+
+class RecipientSelectionTests(unittest.TestCase):
+    """
+    Tests for EnvelopedData.recipient_selection(), which enumerates recipient
+    entries against local certificates without touching any private key.
+    """
+
+    @staticmethod
+    def _make_certificate(common_name, serial, ski=None, key_usage=None,
+                          algorithm='rsa'):
+        if algorithm == 'rsa':
+            public_key = keys.RSAPublicKey({
+                'modulus': 4096 + serial,
+                'public_exponent': 65537,
+            })
+            public_key_info = x509.PublicKeyInfo({
+                'algorithm': {'algorithm': 'rsa'},
+                'public_key': public_key,
+            })
+        else:
+            public_key_info = x509.PublicKeyInfo({
+                'algorithm': {
+                    'algorithm': 'ec',
+                    'parameters': ('named', 'secp256r1'),
+                },
+                'public_key': keys.ECPointBitString(b'\x00' * 16),
+            })
+
+        extensions = []
+        if ski is not None:
+            extensions.append({
+                'extn_id': 'key_identifier',
+                'critical': False,
+                'extn_value': ski,
+            })
+        if key_usage is not None:
+            extensions.append({
+                'extn_id': 'key_usage',
+                'critical': True,
+                'extn_value': key_usage,
+            })
+
+        tbs = {
+            'version': 'v3',
+            'serial_number': serial,
+            'signature': {'algorithm': 'sha256_rsa'},
+            'issuer': x509.Name.build({'common_name': 'Selection Test CA'}),
+            'validity': {
+                'not_before': x509.Time(
+                    name='general_time',
+                    value=core.GeneralizedTime(
+                        datetime(2020, 1, 1, tzinfo=util.timezone.utc)
+                    )
+                ),
+                'not_after': x509.Time(
+                    name='general_time',
+                    value=core.GeneralizedTime(
+                        datetime(2030, 1, 1, tzinfo=util.timezone.utc)
+                    )
+                ),
+            },
+            'subject': x509.Name.build({'common_name': common_name}),
+            'subject_public_key_info': public_key_info,
+        }
+        if extensions:
+            tbs['extensions'] = extensions
+
+        return x509.Certificate({
+            'tbs_certificate': tbs,
+            'signature_algorithm': {'algorithm': 'sha256_rsa'},
+            'signature_value': core.OctetBitString(b'\x00' * 8),
+        })
+
+    @staticmethod
+    def _ktri(version, rid, algorithm, encrypted_key, parameters=None):
+        key_encryption_algorithm = {'algorithm': algorithm}
+        if parameters is not None:
+            key_encryption_algorithm['parameters'] = parameters
+        return cms.RecipientInfo({
+            'ktri': {
+                'version': version,
+                'rid': rid,
+                'key_encryption_algorithm': key_encryption_algorithm,
+                'encrypted_key': encrypted_key,
+            }
+        })
+
+    @staticmethod
+    def _tlv_split(data):
+        length = data[1]
+        if length & 0x80:
+            num_bytes = length & 0x7F
+            header_len = 2 + num_bytes
+            value_len = int.from_bytes(data[2:header_len], 'big')
+        else:
+            header_len = 2
+            value_len = length
+        return data[:header_len], data[header_len:header_len + value_len]
+
+    def _ber_envelope_with_reversed_recipients(self, envelope):
+        """
+        Rebuilds the RecipientInfos SET TLV as a BER SET whose members appear
+        in the reverse of the DER-sorted order. DER always sorts SET members,
+        so this is the only way to present a genuinely different wire order.
+        """
+
+        der = envelope.dump()
+        _, content = self._tlv_split(der)
+
+        field_tlvs = []
+        offset = 0
+        while offset < len(content):
+            header, body = self._tlv_split(content[offset:])
+            field_tlvs.append(header + body)
+            offset += len(header) + len(body)
+
+        set_header, set_body = self._tlv_split(field_tlvs[1])
+        child_tlvs = []
+        offset = 0
+        while offset < len(set_body):
+            header, body = self._tlv_split(set_body[offset:])
+            child_tlvs.append(header + body)
+            offset += len(header) + len(body)
+
+        field_tlvs[1] = set_header + b''.join(reversed(child_tlvs))
+        new_content = b''.join(field_tlvs)
+        if len(new_content) < 128:
+            return b'\x30' + bytes([len(new_content)]) + new_content
+        length_bytes = util.int_to_bytes(len(new_content))
+        return b'\x30' + bytes([0x80 | len(length_bytes)]) + length_bytes \
+            + new_content
+
+    def _build_envelope(self, recipient_infos):
+        return cms.EnvelopedData({
+            'version': 'v2',
+            'recipient_infos': cms.RecipientInfos(recipient_infos),
+            'encrypted_content_info': {
+                'content_type': 'data',
+                'content_encryption_algorithm': {'algorithm': 'aes256_cbc'},
+            },
+        })
+
+    def _build_recipients(self):
+        alice = self._make_certificate(
+            'Alice', 1, ski=b'AAAA', key_usage={'key_encipherment'}
+        )
+        bob = self._make_certificate(
+            'Bob', 2, ski=b'BBBB', key_usage={'key_agreement'},
+            algorithm='ec'
+        )
+        carol = self._make_certificate(
+            'Carol', 3, ski=b'CCCC',
+            key_usage={'digital_signature'}
+        )
+        dave = self._make_certificate('Dave', 4, ski=b'DDDD')
+
+        alice_iasn = self._ktri(
+            'v0',
+            {'issuer_and_serial_number': {
+                'issuer': alice.issuer,
+                'serial_number': alice.serial_number,
+            }},
+            'rsaes_oaep',
+            b'ktri-alice-ek',
+            parameters=cms.RSAESOAEPParams({
+                'hash_algorithm': {'algorithm': 'sha256'},
+                'mask_gen_algorithm': {
+                    'algorithm': 'mgf1',
+                    'parameters': cms.DigestAlgorithm(
+                        {'algorithm': 'sha256'}
+                    ),
+                },
+                'p_source_algorithm': {
+                    'algorithm': 'p_specified',
+                    'parameters': core.OctetString(b''),
+                },
+            }),
+        )
+
+        kari = cms.RecipientInfo({
+            'kari': {
+                'version': 'v3',
+                'originator': {'originator_key': x509.PublicKeyInfo({
+                    'algorithm': {
+                        'algorithm': 'ec',
+                        'parameters': ('named', 'secp256r1'),
+                    },
+                    'public_key': keys.ECPointBitString(b'\x01' * 16),
+                })},
+                'key_encryption_algorithm': {'algorithm': 'aes256_wrap'},
+                'recipient_encrypted_keys': [
+                    {
+                        'rid': {'r_key_id': {
+                            'subject_key_identifier': b'BBBB',
+                        }},
+                        'encrypted_key': b'kari-bob-ek',
+                    },
+                    {
+                        'rid': {'issuer_and_serial_number': {
+                            'issuer': dave.issuer,
+                            'serial_number': dave.serial_number,
+                        }},
+                        'encrypted_key': b'kari-dave-ek',
+                    },
+                ],
+            }
+        })
+
+        carol_ski = self._ktri(
+            'v2',
+            {'subject_key_identifier': b'CCCC'},
+            'rsaes_pkcs1v15',
+            b'ktri-carol-ek',
+        )
+
+        alice_ski = self._ktri(
+            'v2',
+            {'subject_key_identifier': b'AAAA'},
+            'rsaes_pkcs1v15',
+            b'ktri-alice-ek-2',
+        )
+
+        unknown_algorithm = cms.RecipientInfo({
+            'ktri': {
+                'version': 'v2',
+                'rid': {'subject_key_identifier': b'DDDD'},
+                'key_encryption_algorithm': cms.KeyEncryptionAlgorithm({
+                    'algorithm': cms.KeyEncryptionAlgorithmId('1.2.3.4.5.6.7'),
+                }),
+                'encrypted_key': b'ktri-dave-unknown',
+            }
+        })
+
+        kekri = cms.RecipientInfo({
+            'kekri': {
+                'version': 'v4',
+                'kekid': {'key_identifier': b'KEK-ID'},
+                'key_encryption_algorithm': {'algorithm': 'aes256_wrap'},
+                'encrypted_key': b'kek-ek',
+            }
+        })
+
+        certificates = [alice, bob, carol, dave]
+        entries = [
+            alice_iasn,
+            kari,
+            carol_ski,
+            alice_ski,
+            unknown_algorithm,
+            kekri,
+        ]
+        return certificates, entries
+
+    def _summarize(self, selection):
+        rows = []
+        for candidate in selection.candidates:
+            for match in candidate.matches:
+                rows.append((
+                    candidate.recipient_info_type,
+                    match.match_basis,
+                    match.certificate.subject.native['common_name'],
+                    match.status,
+                    match.reason,
+                    match.recipient_encrypted_key_index,
+                    match.encrypted_key,
+                ))
+        return rows
+
+    def test_mixed_envelope_full_selection(self):
+        certificates, entries = self._build_recipients()
+        selection = self._build_envelope(entries).recipient_selection(
+            certificates
+        )
+
+        self.assertEqual(
+            cms.RecipientSelection.STATUS_AMBIGUOUS,
+            selection.status
+        )
+        # 5 certificate-based entries, 1 KEK entry that can never match
+        self.assertEqual(5, selection.recipient_info_count)
+        self.assertEqual(1, selection.other_recipient_info_count)
+        self.assertEqual(
+            ['invalid_key_usage', 'unknown_algorithm'],
+            selection.reasons
+        )
+        # Alice and Dave each appear with two distinct ciphertexts
+        self.assertEqual(2, len(selection.ambiguous_identities))
+
+        rows = self._summarize(selection)
+        self.assertEqual(6, len(rows))
+
+        alice_rows = [row for row in rows if row[2] == 'Alice']
+        self.assertEqual(2, len(alice_rows))
+        self.assertEqual(
+            {'issuer_and_serial_number', 'subject_key_identifier'},
+            set(row[1] for row in alice_rows)
+        )
+        self.assertTrue(all(row[3] == 'usable' for row in alice_rows))
+
+        carol_row = [row for row in rows if row[2] == 'Carol'][0]
+        self.assertEqual(
+            cms.RecipientMatch.STATUS_INVALID_KEY_USAGE,
+            carol_row[3]
+        )
+        self.assertEqual('key_encipherment', carol_row[4])
+
+        dave_rows = [row for row in rows if row[2] == 'Dave']
+        statuses = set(row[3] for row in dave_rows)
+        self.assertIn('usable', statuses)
+        self.assertIn('unknown_algorithm', statuses)
+
+    def test_selection_independent_of_wire_order(self):
+        certificates, entries = self._build_recipients()
+        envelope = self._build_envelope(entries)
+
+        canonical = cms.EnvelopedData.load(envelope.dump())
+        reversed_ber = cms.EnvelopedData.load(
+            self._ber_envelope_with_reversed_recipients(envelope)
+        )
+
+        # The BER envelope really does present a different wire order
+        wire_keys = []
+        for info in reversed_ber['recipient_infos']:
+            if info.name == 'ktri':
+                wire_keys.append(info.chosen['encrypted_key'].native)
+            else:
+                wire_keys.append(b'<kari>')
+        self.assertNotEqual(
+            wire_keys,
+            [info.chosen['encrypted_key'].native if info.name == 'ktri'
+             else b'<kari>' for info in canonical['recipient_infos']]
+        )
+
+        first = canonical.recipient_selection(certificates)
+        second = reversed_ber.recipient_selection(certificates)
+
+        self.assertEqual(first.status, second.status)
+        self.assertEqual(first.reasons, second.reasons)
+        self.assertEqual(
+            first.ambiguous_identities,
+            second.ambiguous_identities
+        )
+        self.assertEqual(
+            self._summarize(first),
+            self._summarize(second)
+        )
+
+    def test_no_match_is_distinct_from_unsupported(self):
+        certificates, entries = self._build_recipients()
+        stranger = self._make_certificate(
+            'Stranger', 99, ski=b'ZZZZ', key_usage={'key_encipherment'}
+        )
+        selection = self._build_envelope(entries).recipient_selection(
+            stranger
+        )
+
+        self.assertEqual(cms.RecipientSelection.STATUS_NO_MATCH, selection.status)
+        self.assertEqual([], selection.candidates)
+        self.assertEqual([], selection.reasons)
+        self.assertEqual([], selection.usable_matches)
+
+    def test_unknown_algorithm_status(self):
+        certificates, _ = self._build_recipients()
+        dave = certificates[3]
+        entry = cms.RecipientInfo({
+            'ktri': {
+                'version': 'v2',
+                'rid': {'subject_key_identifier': b'DDDD'},
+                'key_encryption_algorithm': cms.KeyEncryptionAlgorithm({
+                    'algorithm': cms.KeyEncryptionAlgorithmId('1.2.3.4.5.6.7'),
+                }),
+                'encrypted_key': b'ciphertext',
+            }
+        })
+        selection = self._build_envelope([entry]).recipient_selection(dave)
+        match = selection.candidates[0].matches[0]
+
+        self.assertEqual(
+            cms.RecipientSelection.STATUS_UNSUPPORTED,
+            selection.status
+        )
+        self.assertEqual(
+            cms.RecipientMatch.STATUS_UNKNOWN_ALGORITHM,
+            match.status
+        )
+        self.assertEqual('1.2.3.4.5.6.7', match.reason)
+        self.assertFalse(match.usable)
+
+    def test_unsupported_parameters_status(self):
+        certificates, _ = self._build_recipients()
+        alice = certificates[0]
+
+        # rsaes_oaep with parameters that are not an RSAESOAEPParams sequence
+        oid = cms.KeyEncryptionAlgorithmId('1.2.840.113549.1.1.7').dump()
+        bad_params = core.OctetString(b'\x01\x02\x03').dump()
+        algo_body = oid + bad_params
+        malformed_algorithm = b'\x30' + bytes([len(algo_body)]) + algo_body
+
+        entry = cms.RecipientInfo({
+            'ktri': {
+                'version': 'v2',
+                'rid': {'subject_key_identifier': b'AAAA'},
+                'key_encryption_algorithm':
+                    cms.KeyEncryptionAlgorithm.load(malformed_algorithm),
+                'encrypted_key': b'ciphertext',
+            }
+        })
+        selection = self._build_envelope([entry]).recipient_selection(alice)
+        match = selection.candidates[0].matches[0]
+
+        self.assertEqual(
+            cms.RecipientMatch.STATUS_UNSUPPORTED_PARAMETERS,
+            match.status
+        )
+        self.assertEqual(
+            cms.RecipientSelection.STATUS_UNSUPPORTED,
+            selection.status
+        )
+
+    def test_invalid_key_usage_status(self):
+        certificates, _ = self._build_recipients()
+        carol = certificates[2]
+        entry = self._ktri(
+            'v2',
+            {'subject_key_identifier': b'CCCC'},
+            'rsaes_pkcs1v15',
+            b'ciphertext',
+        )
+        selection = self._build_envelope([entry]).recipient_selection(carol)
+        match = selection.candidates[0].matches[0]
+
+        self.assertEqual(
+            cms.RecipientMatch.STATUS_INVALID_KEY_USAGE,
+            match.status
+        )
+        self.assertEqual('key_encipherment', match.reason)
+
+    def test_key_agreement_requires_key_agreement_usage(self):
+        bob = self._make_certificate(
+            'Bob', 2, ski=b'BBBB',
+            key_usage={'digital_signature'}, algorithm='ec'
+        )
+        kari = cms.RecipientInfo({
+            'kari': {
+                'version': 'v3',
+                'originator': {'originator_key': x509.PublicKeyInfo({
+                    'algorithm': {
+                        'algorithm': 'ec',
+                        'parameters': ('named', 'secp256r1'),
+                    },
+                    'public_key': keys.ECPointBitString(b'\x01' * 16),
+                })},
+                'key_encryption_algorithm': {'algorithm': 'aes256_wrap'},
+                'recipient_encrypted_keys': [
+                    {
+                        'rid': {'r_key_id': {
+                            'subject_key_identifier': b'BBBB',
+                        }},
+                        'encrypted_key': b'kari-bob-ek',
+                    },
+                ],
+            }
+        })
+        selection = self._build_envelope([kari]).recipient_selection(bob)
+        match = selection.candidates[0].matches[0]
+
+        self.assertEqual(
+            cms.RecipientMatch.STATUS_INVALID_KEY_USAGE,
+            match.status
+        )
+        self.assertEqual('key_agreement', match.reason)
+
+    def test_key_agreement_layered_ownership(self):
+        certificates, _ = self._build_recipients()
+        bob, dave = certificates[1], certificates[3]
+        kari = cms.RecipientInfo({
+            'kari': {
+                'version': 'v3',
+                'originator': {'originator_key': x509.PublicKeyInfo({
+                    'algorithm': {
+                        'algorithm': 'ec',
+                        'parameters': ('named', 'secp256r1'),
+                    },
+                    'public_key': keys.ECPointBitString(b'\x01' * 16),
+                })},
+                'key_encryption_algorithm': {'algorithm': 'aes256_wrap'},
+                'recipient_encrypted_keys': [
+                    {
+                        'rid': {'r_key_id': {
+                            'subject_key_identifier': b'BBBB',
+                        }},
+                        'encrypted_key': b'kari-bob-ek',
+                    },
+                    {
+                        'rid': {'issuer_and_serial_number': {
+                            'issuer': dave.issuer,
+                            'serial_number': dave.serial_number,
+                        }},
+                        'encrypted_key': b'kari-dave-ek',
+                    },
+                ],
+            }
+        })
+        selection = self._build_envelope([kari]).recipient_selection(
+            [bob, dave]
+        )
+
+        self.assertEqual(1, len(selection.candidates))
+        candidate = selection.candidates[0]
+        self.assertEqual('kari', candidate.recipient_info_type)
+        self.assertEqual(2, len(candidate.matches))
+        self.assertEqual(
+            [0, 1],
+            sorted(
+                match.recipient_encrypted_key_index
+                for match in candidate.matches
+            )
+        )
+        by_index = dict(
+            (match.recipient_encrypted_key_index, match)
+            for match in candidate.matches
+        )
+        self.assertEqual(
+            'Bob',
+            by_index[0].certificate.subject.native['common_name']
+        )
+        self.assertEqual(
+            cms.RecipientMatch.MATCH_SUBJECT_KEY_IDENTIFIER,
+            by_index[0].match_basis
+        )
+        self.assertEqual(
+            'Dave',
+            by_index[1].certificate.subject.native['common_name']
+        )
+        self.assertEqual(
+            cms.RecipientMatch.MATCH_ISSUER_AND_SERIAL,
+            by_index[1].match_basis
+        )
+
+    def test_duplicate_ciphertext_is_not_ambiguous(self):
+        certificates, _ = self._build_recipients()
+        alice = certificates[0]
+        entries = [
+            self._ktri(
+                'v0',
+                {'issuer_and_serial_number': {
+                    'issuer': alice.issuer,
+                    'serial_number': alice.serial_number,
+                }},
+                'rsaes_pkcs1v15',
+                b'same-ciphertext',
+            ),
+            self._ktri(
+                'v2',
+                {'subject_key_identifier': b'AAAA'},
+                'rsaes_pkcs1v15',
+                b'same-ciphertext',
+            ),
+        ]
+        selection = self._build_envelope(entries).recipient_selection(alice)
+
+        self.assertEqual(cms.RecipientSelection.STATUS_USABLE, selection.status)
+        self.assertEqual([], selection.ambiguous_identities)
+        self.assertEqual(2, len(selection.usable_matches))
+
+    def test_ambiguous_identity_with_different_ciphertexts(self):
+        certificates, _ = self._build_recipients()
+        alice = certificates[0]
+        entries = [
+            self._ktri(
+                'v2',
+                {'subject_key_identifier': b'AAAA'},
+                'rsaes_pkcs1v15',
+                b'ciphertext-one',
+            ),
+            self._ktri(
+                'v2',
+                {'subject_key_identifier': b'AAAA'},
+                'rsaes_pkcs1v15',
+                b'ciphertext-two',
+            ),
+        ]
+        selection = self._build_envelope(entries).recipient_selection(alice)
+
+        self.assertEqual(
+            cms.RecipientSelection.STATUS_AMBIGUOUS,
+            selection.status
+        )
+        self.assertEqual(1, len(selection.ambiguous_identities))
+        # Ambiguity is reported instead of silently picking an entry
+        self.assertEqual(2, len(selection.candidates))
+
+    def test_content_info_wrapper(self):
+        certificates, entries = self._build_recipients()
+        content_info = cms.ContentInfo({
+            'content_type': 'enveloped_data',
+            'content': self._build_envelope(entries),
+        })
+        selection = content_info.recipient_selection(certificates)
+
+        self.assertEqual(
+            cms.RecipientSelection.STATUS_AMBIGUOUS,
+            selection.status
+        )
+
+        with self.assertRaises(ValueError):
+            cms.ContentInfo({
+                'content_type': 'data',
+                'content': core.OctetString(b'x'),
+            }).recipient_selection(certificates)
+
+    def test_invalid_certificate_argument(self):
+        envelope = self._build_envelope([])
+        with self.assertRaises(TypeError):
+            envelope.recipient_selection('not a certificate')
+        with self.assertRaises(TypeError):
+            envelope.recipient_selection(['not a certificate'])
+
+    def test_shared_ski_surfaces_every_matching_certificate(self):
+        # Key rollover can leave two distinct local certificates carrying the
+        # same subject key identifier; neither may be picked silently.
+        old_cert = self._make_certificate(
+            'Old', 21, ski=b'SHARED', key_usage={'key_encipherment'}
+        )
+        new_cert = self._make_certificate(
+            'New', 22, ski=b'SHARED', key_usage={'key_encipherment'}
+        )
+        self.assertNotEqual(
+            old_cert.issuer_serial,
+            new_cert.issuer_serial
+        )
+
+        entry = self._ktri(
+            'v2',
+            {'subject_key_identifier': b'SHARED'},
+            'rsaes_pkcs1v15',
+            b'one-ciphertext',
+        )
+        selection = self._build_envelope([entry]).recipient_selection(
+            [old_cert, new_cert]
+        )
+
+        self.assertEqual(cms.RecipientSelection.STATUS_USABLE, selection.status)
+        self.assertEqual(1, len(selection.candidates))
+        self.assertEqual(2, len(selection.candidates[0].matches))
+        self.assertEqual(
+            ['New', 'Old'],
+            sorted(
+                match.certificate.subject.native['common_name']
+                for match in selection.candidates[0].matches
+            )
+        )
+
+    def test_auth_enveloped_data_uses_same_enumeration(self):
+        certificates, _ = self._build_recipients()
+        alice = certificates[0]
+        envelope = cms.AuthEnvelopedData({
+            'version': 'v0',
+            'recipient_infos': cms.RecipientInfos([
+                self._ktri(
+                    'v2',
+                    {'subject_key_identifier': b'AAAA'},
+                    'rsaes_pkcs1v15',
+                    b'auth-ek',
+                )
+            ]),
+            'auth_encrypted_content_info': {
+                'content_type': 'data',
+                'content_encryption_algorithm': {'algorithm': 'aes256_gcm'},
+            },
+            'mac': b'mac-value',
+        })
+
+        selection = envelope.recipient_selection(alice)
+        self.assertEqual(cms.RecipientSelection.STATUS_USABLE, selection.status)
+        self.assertEqual(1, len(selection.usable_matches))
+
+    def test_result_contains_no_private_key_material(self):
+        certificates, entries = self._build_recipients()
+        selection = self._build_envelope(entries).recipient_selection(
+            certificates
+        )
+        rendered = repr(selection)
+        for candidate in selection.candidates:
+            rendered += repr(candidate)
+            for match in candidate.matches:
+                rendered += repr(match)
+                self.assertIsInstance(match.encrypted_key, byte_cls)
+                self.assertTrue(hasattr(match, 'certificate'))
+                self.assertFalse(hasattr(match, 'private_key'))
+
+        self.assertNotIn('private_key', rendered.lower())
+        # Only public certificate objects and ciphertext bytes are exposed
+        for match in selection.usable_matches:
+            self.assertIsInstance(match.certificate, x509.Certificate)

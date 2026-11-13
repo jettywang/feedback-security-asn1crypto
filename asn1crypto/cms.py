@@ -11,6 +11,9 @@ compatible with PKCS#7. Exports the following items:
  - DigestedData()
  - EncryptedData()
  - EnvelopedData()
+ - RecipientInfoCandidate()
+ - RecipientMatch()
+ - RecipientSelection()
  - SignedAndEnvelopedData()
  - SignedData()
 
@@ -26,6 +29,7 @@ try:
 except (ImportError):
     zlib = None
 
+from ._errors import unwrap
 from .algos import (
     _ForceNullParameters,
     DigestAlgorithm,
@@ -43,6 +47,7 @@ from .core import (
     Enumerated,
     GeneralizedTime,
     Integer,
+    Null,
     ObjectIdentifier,
     OctetBitString,
     OctetString,
@@ -52,6 +57,7 @@ from .core import (
     SetOf,
     UTCTime,
     UTF8String,
+    Void,
 )
 from .crl import CertificateList
 from .keys import PublicKeyInfo
@@ -527,6 +533,35 @@ class ContentInfo(Sequence):
     _oid_pair = ('content_type', 'content')
     _oid_specs = {}
 
+    def recipient_selection(self, certificates):
+        """
+        Convenience wrapper around
+        :meth:`EnvelopedData.recipient_selection` for a ContentInfo
+        encapsulating enveloped data.
+
+        :param certificates:
+            An x509.Certificate object, or a list of them
+
+        :return:
+            A RecipientSelection object
+
+        :raises:
+            ValueError - when the encapsulated content is not enveloped data
+        """
+
+        content = self['content']
+        if self['content_type'].native != 'enveloped_data' or \
+                not isinstance(content, EnvelopedData):
+            raise ValueError(unwrap(
+                '''
+                ContentInfo.recipient_selection() is only valid for content of
+                type enveloped_data, not %s
+                ''',
+                self['content_type'].native
+            ))
+
+        return content.recipient_selection(certificates)
+
 
 class SetOfContentInfo(SetOf):
     _child_spec = ContentInfo
@@ -811,6 +846,521 @@ class RecipientInfos(SetOf):
     _child_spec = RecipientInfo
 
 
+class RecipientMatch(object):
+    """
+    A single recipient encrypted key that was matched to one of the local
+    certificates while enumerating the RecipientInfo structures of a CMS
+    EnvelopedData or AuthEnvelopedData value.
+
+    A match only records *why* a recipient entry was selected - no private key
+    material is ever referenced, and no decryption is attempted. The encrypted
+    key bytes are retained so that a caller can perform the actual unwrap after
+    inspecting :attr:`.status`.
+    """
+
+    #: The recipient entry used an IssuerAndSerialNumber identifier
+    MATCH_ISSUER_AND_SERIAL = 'issuer_and_serial_number'
+    #: The recipient entry used a SubjectKeyIdentifier identifier
+    MATCH_SUBJECT_KEY_IDENTIFIER = 'subject_key_identifier'
+
+    #: The entry can be acted upon with the matched certificate's private key
+    STATUS_USABLE = 'usable'
+    #: The key encryption algorithm OID is not known to asn1crypto
+    STATUS_UNKNOWN_ALGORITHM = 'unknown_algorithm'
+    #: The algorithm is known, but its parameters could not be parsed
+    STATUS_UNSUPPORTED_PARAMETERS = 'unsupported_parameters'
+    #: The certificate's key usage extension forbids the required operation
+    STATUS_INVALID_KEY_USAGE = 'invalid_key_usage'
+
+    def __init__(self, recipient_info_type, match_basis, certificate,
+                 key_encryption_algorithm, encrypted_key, status,
+                 reason=None, recipient_encrypted_key_index=None):
+        self.recipient_info_type = recipient_info_type
+        self.match_basis = match_basis
+        self.certificate = certificate
+        self.key_encryption_algorithm = key_encryption_algorithm
+        self.encrypted_key = encrypted_key
+        self.status = status
+        self.reason = reason
+        self.recipient_encrypted_key_index = recipient_encrypted_key_index
+
+    def __repr__(self):
+        return 'RecipientMatch(%s, %s, %s, %s)' % (
+            self.recipient_info_type,
+            self.match_basis,
+            self.status,
+            self.reason,
+        )
+
+    @property
+    def usable(self):
+        """
+        :return:
+            A boolean - if the match has status ``"usable"``
+        """
+
+        return self.status == self.STATUS_USABLE
+
+    @property
+    def identity_key(self):
+        """
+        A stable identifier of the certificate that matched, used to detect the
+        same identity appearing in multiple recipient entries regardless of
+        which identifier form selected it.
+
+        :return:
+            A byte string
+        """
+
+        return self.certificate.issuer_serial
+
+
+class RecipientInfoCandidate(object):
+    """
+    The matches found inside a single top-level RecipientInfo. For a
+    KeyTransRecipientInfo there is at most one :class:`RecipientMatch`; for a
+    KeyAgreeRecipientInfo there is one match per relevant member of the
+    RecipientEncryptedKeys sequence, preserving the layered ownership.
+    """
+
+    def __init__(self, recipient_info_type, recipient_info, matches):
+        self.recipient_info_type = recipient_info_type
+        self.recipient_info = recipient_info
+        self.matches = matches
+
+    def __repr__(self):
+        return 'RecipientInfoCandidate(%s, %d match(es))' % (
+            self.recipient_info_type,
+            len(self.matches),
+        )
+
+    @property
+    def statuses(self):
+        """
+        :return:
+            A set of the distinct ``status`` values of the contained matches
+        """
+
+        return set([match.status for match in self.matches])
+
+    @property
+    def usable(self):
+        """
+        :return:
+            A boolean - if every contained match is usable
+        """
+
+        return all(match.usable for match in self.matches)
+
+
+class RecipientSelection(object):
+    """
+    The order-independent result of enumerating the recipient entries of an
+    enveloped CMS structure against a set of local certificates. Only entries
+    that refer to one of the local certificates produce
+    :class:`RecipientInfoCandidate` objects, so an empty :attr:`.candidates`
+    list means no recipient was addressed to this holder, which is a distinct
+    outcome from an unsupported algorithm or invalid key usage.
+    """
+
+    #: No recipient entry referred to any local certificate
+    STATUS_NO_MATCH = 'no_match'
+    #: A single certificate is referenced by two or more different ciphertexts
+    STATUS_AMBIGUOUS = 'ambiguous'
+    #: At least one matching entry is usable and no ambiguity was detected
+    STATUS_USABLE = 'usable'
+    #: All matching entries are blocked by algorithm or key usage problems
+    STATUS_UNSUPPORTED = 'unsupported'
+
+    _problem_statuses = (
+        RecipientMatch.STATUS_UNKNOWN_ALGORITHM,
+        RecipientMatch.STATUS_UNSUPPORTED_PARAMETERS,
+        RecipientMatch.STATUS_INVALID_KEY_USAGE,
+    )
+
+    def __init__(self, candidates, recipient_info_count, other_recipient_info_count):
+        self.candidates = candidates
+        self.recipient_info_count = recipient_info_count
+        self.other_recipient_info_count = other_recipient_info_count
+
+        ciphertexts_by_identity = {}
+        for candidate in candidates:
+            for match in candidate.matches:
+                ciphertexts = ciphertexts_by_identity.setdefault(match.identity_key, set())
+                ciphertexts.add(match.encrypted_key)
+
+        self.ambiguous_identities = sorted([
+            identity for identity, ciphertexts in ciphertexts_by_identity.items()
+            if len(ciphertexts) > 1
+        ])
+
+        all_statuses = set()
+        for candidate in candidates:
+            all_statuses.update(candidate.statuses)
+
+        if not candidates:
+            self.status = self.STATUS_NO_MATCH
+        elif self.ambiguous_identities:
+            self.status = self.STATUS_AMBIGUOUS
+        elif RecipientMatch.STATUS_USABLE in all_statuses:
+            self.status = self.STATUS_USABLE
+        else:
+            self.status = self.STATUS_UNSUPPORTED
+
+        self.reasons = sorted(all_statuses.intersection(self._problem_statuses))
+
+    def __repr__(self):
+        return 'RecipientSelection(%s, %d candidate(s))' % (
+            self.status,
+            len(self.candidates),
+        )
+
+    @property
+    def usable_matches(self):
+        """
+        :return:
+            A list of every usable :class:`RecipientMatch`, in the same
+            order as :attr:`.candidates`
+        """
+
+        return [
+            match
+            for candidate in self.candidates
+            for match in candidate.matches
+            if match.usable
+        ]
+
+
+def _certificate_ski(certificate):
+    """
+    :param certificate:
+        An x509.Certificate object
+
+    :return:
+        None or a byte string of the certificate's subject key identifier
+    """
+
+    return certificate.key_identifier
+
+
+def _certificate_matches_issuer_serial(certificate, issuer_and_serial):
+    """
+    Compares a certificate against an IssuerAndSerialNumber value using the
+    RFC 5280 name comparison rules.
+
+    :param certificate:
+        An x509.Certificate object
+
+    :param issuer_and_serial:
+        An IssuerAndSerialNumber object
+
+    :return:
+        A boolean
+    """
+
+    return (
+        certificate.issuer == issuer_and_serial['issuer']
+        and certificate.serial_number == issuer_and_serial['serial_number'].native
+    )
+
+
+def _certificate_matches_ski(certificate, subject_key_identifier):
+    """
+    :param certificate:
+        An x509.Certificate object
+
+    :param subject_key_identifier:
+        A byte string of the subject key identifier from a recipient entry
+
+    :return:
+        A boolean
+    """
+
+    certificate_ski = _certificate_ski(certificate)
+    return certificate_ski is not None and certificate_ski == subject_key_identifier
+
+
+def _key_usage_allows(certificate, required_usage):
+    """
+    Checks the key usage extension of a certificate. A certificate without a
+    key usage extension is unrestricted. When the extension is present, the
+    required usage bit (``"key_encipherment"`` for key transport,
+    ``"key_agreement"`` for key agreement) must be asserted.
+
+    :param certificate:
+        An x509.Certificate object
+
+    :param required_usage:
+        A unicode string from x509.KeyUsage._map
+
+    :return:
+        A boolean
+    """
+
+    key_usage = certificate.key_usage_value
+    if key_usage is None:
+        return True
+    return required_usage in key_usage.native
+
+
+def _algorithm_support(key_encryption_algorithm):
+    """
+    Determines whether the key encryption algorithm of a recipient entry is one
+    asn1crypto can describe. The OID must be registered on
+    KeyEncryptionAlgorithmId and, when parameters are present, they must parse
+    against the registered parameter specification.
+
+    :param key_encryption_algorithm:
+        A KeyEncryptionAlgorithm object
+
+    :return:
+        A tuple of (status unicode string or None when supported, reason
+        unicode string or None)
+    """
+
+    algorithm_id = key_encryption_algorithm['algorithm']
+    if algorithm_id.dotted not in KeyEncryptionAlgorithmId._map:
+        return (
+            RecipientMatch.STATUS_UNKNOWN_ALGORITHM,
+            algorithm_id.dotted
+        )
+
+    try:
+        parameters = key_encryption_algorithm['parameters']
+        if isinstance(parameters, (Void, Null)):
+            return (None, None)
+
+        if isinstance(parameters, Any):
+            parameters.parsed
+    except (ValueError, TypeError) as e:
+        return (
+            RecipientMatch.STATUS_UNSUPPORTED_PARAMETERS,
+            e.args[0] if e.args else algorithm_id.native
+        )
+
+    return (None, None)
+
+
+def _match_status(certificate, key_encryption_algorithm, required_usage):
+    """
+    Combines the algorithm support and key usage checks into a single status.
+
+    :param certificate:
+        An x509.Certificate object
+
+    :param key_encryption_algorithm:
+        A KeyEncryptionAlgorithm object
+
+    :param required_usage:
+        A unicode string from x509.KeyUsage._map
+
+    :return:
+        A tuple of (status unicode string, reason unicode string or None)
+    """
+
+    status, reason = _algorithm_support(key_encryption_algorithm)
+    if status is not None:
+        return status, reason
+
+    if not _key_usage_allows(certificate, required_usage):
+        return RecipientMatch.STATUS_INVALID_KEY_USAGE, required_usage
+
+    return RecipientMatch.STATUS_USABLE, None
+
+
+def _match_key_trans_recipient(recipient_info, certificates):
+    """
+    Enumerates the local certificates selected by a KeyTransRecipientInfo.
+
+    :param recipient_info:
+        A KeyTransRecipientInfo object
+
+    :param certificates:
+        A list of x509.Certificate objects
+
+    :return:
+        A list of RecipientMatch objects
+    """
+
+    identifier = recipient_info['rid']
+    identifier_name = identifier.name
+    key_encryption_algorithm = recipient_info['key_encryption_algorithm']
+    encrypted_key = recipient_info['encrypted_key'].native
+
+    matches = []
+    for certificate in certificates:
+        if identifier_name == 'issuer_and_serial_number':
+            if not _certificate_matches_issuer_serial(certificate, identifier.chosen):
+                continue
+            match_basis = RecipientMatch.MATCH_ISSUER_AND_SERIAL
+        else:
+            if not _certificate_matches_ski(certificate, identifier.chosen.native):
+                continue
+            match_basis = RecipientMatch.MATCH_SUBJECT_KEY_IDENTIFIER
+
+        status, reason = _match_status(
+            certificate,
+            key_encryption_algorithm,
+            'key_encipherment'
+        )
+        matches.append(RecipientMatch(
+            recipient_info_type='ktri',
+            match_basis=match_basis,
+            certificate=certificate,
+            key_encryption_algorithm=key_encryption_algorithm,
+            encrypted_key=encrypted_key,
+            status=status,
+            reason=reason,
+        ))
+
+    return matches
+
+
+def _match_key_agreement_recipient(recipient_info, certificates):
+    """
+    Enumerates, per member of the RecipientEncryptedKeys sequence, the local
+    certificates selected by a KeyAgreeRecipientInfo. Each member keeps its
+    structural index so the layered ownership of the encrypted keys inside the
+    single recipient entry is preserved.
+
+    :param recipient_info:
+        A KeyAgreeRecipientInfo object
+
+    :param certificates:
+        A list of x509.Certificate objects
+
+    :return:
+        A list of RecipientMatch objects
+    """
+
+    key_encryption_algorithm = recipient_info['key_encryption_algorithm']
+
+    matches = []
+    for index, recipient_encrypted_key in enumerate(
+        recipient_info['recipient_encrypted_keys']
+    ):
+        identifier = recipient_encrypted_key['rid']
+        identifier_name = identifier.name
+        encrypted_key = recipient_encrypted_key['encrypted_key'].native
+
+        for certificate in certificates:
+            if identifier_name == 'issuer_and_serial_number':
+                if not _certificate_matches_issuer_serial(certificate, identifier.chosen):
+                    continue
+                match_basis = RecipientMatch.MATCH_ISSUER_AND_SERIAL
+            else:
+                subject_key_identifier = \
+                    identifier.chosen['subject_key_identifier'].native
+                if not _certificate_matches_ski(certificate, subject_key_identifier):
+                    continue
+                match_basis = RecipientMatch.MATCH_SUBJECT_KEY_IDENTIFIER
+
+            status, reason = _match_status(
+                certificate,
+                key_encryption_algorithm,
+                'key_agreement'
+            )
+            matches.append(RecipientMatch(
+                recipient_info_type='kari',
+                match_basis=match_basis,
+                certificate=certificate,
+                key_encryption_algorithm=key_encryption_algorithm,
+                encrypted_key=encrypted_key,
+                status=status,
+                reason=reason,
+                recipient_encrypted_key_index=index,
+            ))
+
+    return matches
+
+
+def _normalize_certificates(certificates):
+    """
+    Validates the certificates argument of recipient_selection() and always
+    returns a list.
+
+    :param certificates:
+        An x509.Certificate object, or a list of them
+
+    :return:
+        A list of x509.Certificate objects
+
+    :raises:
+        TypeError - when any entry is not an x509.Certificate
+    """
+
+    if isinstance(certificates, Certificate):
+        certificates = [certificates]
+    else:
+        certificates = list(certificates)
+
+    for certificate in certificates:
+        if not isinstance(certificate, Certificate):
+            raise TypeError(unwrap(
+                '''
+                certificates must be an x509.Certificate or a list of
+                x509.Certificate objects, not %s
+                ''',
+                type(certificate).__name__
+            ))
+
+    return certificates
+
+
+def _enumerate_recipient_candidates(recipient_infos, certificates):
+    """
+    Walks every RecipientInfo and retains one RecipientInfoCandidate for each
+    entry that selects at least one local certificate. Candidates are sorted on
+    content-derived keys so the result does not depend on the encoding order of
+    the RecipientInfos SET.
+
+    :param recipient_infos:
+        A RecipientInfos object
+
+    :param certificates:
+        A list of x509.Certificate objects
+
+    :return:
+        A tuple of (candidates list, ktri/kari count, other entry count)
+    """
+
+    candidates = []
+    recipient_info_count = 0
+    other_recipient_info_count = 0
+
+    for recipient_info in recipient_infos:
+        recipient_info_name = recipient_info.name
+
+        if recipient_info_name == 'ktri':
+            recipient_info_count += 1
+            matches = _match_key_trans_recipient(recipient_info.chosen, certificates)
+        elif recipient_info_name == 'kari':
+            recipient_info_count += 1
+            matches = _match_key_agreement_recipient(recipient_info.chosen, certificates)
+        else:
+            # KEK, password and other recipient infos are never certificate
+            # based, so they can never select a local certificate.
+            other_recipient_info_count += 1
+            continue
+
+        if not matches:
+            continue
+
+        candidate = RecipientInfoCandidate(
+            recipient_info_type=recipient_info_name,
+            recipient_info=recipient_info.chosen,
+            matches=matches,
+        )
+        candidates.append((recipient_info.chosen.dump(), candidate))
+
+    candidates.sort(key=lambda item: item[0])
+    return (
+        [candidate for _, candidate in candidates],
+        recipient_info_count,
+        other_recipient_info_count,
+    )
+
+
 class EncryptedContentInfo(Sequence):
     _fields = [
         ('content_type', ContentType),
@@ -827,6 +1377,43 @@ class EnvelopedData(Sequence):
         ('encrypted_content_info', EncryptedContentInfo),
         ('unprotected_attrs', CMSAttributes, {'implicit': 1, 'optional': True}),
     ]
+
+    def recipient_selection(self, certificates):
+        """
+        Enumerates the recipient entries against one or more local
+        certificates and returns the full set of matches with the reason each
+        entry was selected. No private key is used and no decryption is
+        attempted, so the result is safe to inspect before touching any key
+        material.
+
+        Both IssuerAndSerialNumber and SubjectKeyIdentifier identifiers are
+        supported. For KeyAgreeRecipientInfo, every member of the
+        RecipientEncryptedKeys sequence is evaluated separately and keeps its
+        position inside the parent entry. The returned candidates are ordered
+        independently of the encoding order of the RecipientInfos SET.
+
+        :param certificates:
+            An x509.Certificate object, or a list of them, representing the
+            local credentials that recipient entries may address
+
+        :return:
+            A RecipientSelection object. Its ``status`` attribute distinguishes
+            ``"no_match"``, ``"ambiguous"`` (one identity with multiple
+            different ciphertexts), ``"usable"`` and ``"unsupported"`` (the
+            matches are blocked by an unknown algorithm, unparseable
+            parameters or an unsuitable certificate key usage)
+        """
+
+        certificates = _normalize_certificates(certificates)
+
+        candidates, recipient_info_count, other_recipient_info_count = \
+            _enumerate_recipient_candidates(self['recipient_infos'], certificates)
+
+        return RecipientSelection(
+            candidates=candidates,
+            recipient_info_count=recipient_info_count,
+            other_recipient_info_count=other_recipient_info_count,
+        )
 
 
 class SignedAndEnvelopedData(Sequence):
@@ -902,6 +1489,30 @@ class AuthEnvelopedData(Sequence):
         ('mac', OctetString),
         ('unauth_attrs', CMSAttributes, {'implicit': 2, 'optional': True}),
     ]
+
+    def recipient_selection(self, certificates):
+        """
+        Enumerates the recipient entries of authenticated enveloped data -
+        behaves identically to
+        :meth:`EnvelopedData.recipient_selection`.
+
+        :param certificates:
+            An x509.Certificate object, or a list of them
+
+        :return:
+            A RecipientSelection object
+        """
+
+        certificates = _normalize_certificates(certificates)
+
+        candidates, recipient_info_count, other_recipient_info_count = \
+            _enumerate_recipient_candidates(self['recipient_infos'], certificates)
+
+        return RecipientSelection(
+            candidates=candidates,
+            recipient_info_count=recipient_info_count,
+            other_recipient_info_count=other_recipient_info_count,
+        )
 
 
 class CompressionAlgorithmId(ObjectIdentifier):

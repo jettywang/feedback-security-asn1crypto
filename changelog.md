@@ -1,5 +1,21 @@
 # changelog
 
+## 1.6.0
+
+ - Added `cms.EnvelopedData.recipient_selection()` and
+   `cms.AuthEnvelopedData.recipient_selection()`, with a
+   `cms.ContentInfo.recipient_selection()` wrapper, to enumerate the
+   recipient entries that match one or more local certificates before any
+   private key operation. The result (`cms.RecipientSelection`) exposes
+   `cms.RecipientInfoCandidate` and `cms.RecipientMatch` objects covering
+   both `IssuerAndSerialNumber` and `SubjectKeyIdentifier` identifiers,
+   preserves the per-key ownership inside
+   `KeyAgreeRecipientInfo.recipient_encrypted_keys`, is independent of the
+   encoding order of the recipient SET, and distinguishes no matching
+   recipient, an ambiguous identity with multiple ciphertexts, unsupported
+   key encryption algorithms/parameters and unsuitable certificate key
+   usage
+
 ## 1.5.1
 
  - Handle RSASSA-PSS in `keys.PrivateKeyInfo.bit_size` and

@@ -13,6 +13,11 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 
 import hashlib
 
+from ._extension_checks import (
+    ExtensionHostMixin,
+    SCOPE_CRL_ENTRY,
+    SCOPE_TBS_CRL,
+)
 from .algos import SignedDigestAlgorithm
 from .core import (
     Boolean,
@@ -160,51 +165,32 @@ class CRLEntryExtensions(SequenceOf):
     _child_spec = CRLEntryExtension
 
 
-class RevokedCertificate(Sequence):
+class RevokedCertificate(ExtensionHostMixin, Sequence):
     _fields = [
         ('user_certificate', Integer),
         ('revocation_date', Time),
         ('crl_entry_extensions', CRLEntryExtensions, {'optional': True}),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _crl_reason_value = None
-    _invalidity_date_value = None
-    _certificate_issuer_value = None
+    _extension_scope = SCOPE_CRL_ENTRY
+    _extension_path = ('crl_entry_extensions',)
+    _extension_value_attributes = (
+        '_crl_reason_value',
+        '_invalidity_date_value',
+        '_certificate_issuer_value',
+    )
+
     _issuer_name = False
 
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; convenience attributes retain "last item
+        wins" semantics consistent with the report's effective entry.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['crl_entry_extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def crl_reason_value(self):
@@ -215,8 +201,7 @@ class RevokedCertificate(Sequence):
             None or a CRLReason object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._crl_reason_value
 
     @property
@@ -231,8 +216,7 @@ class RevokedCertificate(Sequence):
             None or a GeneralizedTime object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._invalidity_date_value
 
     @property
@@ -246,8 +230,7 @@ class RevokedCertificate(Sequence):
             None or an x509.GeneralNames object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._certificate_issuer_value
 
     @property
@@ -283,22 +266,25 @@ class TbsCertList(Sequence):
     ]
 
 
-class CertificateList(Sequence):
+class CertificateList(ExtensionHostMixin, Sequence):
     _fields = [
         ('tbs_cert_list', TbsCertList),
         ('signature_algorithm', SignedDigestAlgorithm),
         ('signature', OctetBitString),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _issuer_alt_name_value = None
-    _crl_number_value = None
-    _delta_crl_indicator_value = None
-    _issuing_distribution_point_value = None
-    _authority_key_identifier_value = None
-    _freshest_crl_value = None
-    _authority_information_access_value = None
+    _extension_scope = SCOPE_TBS_CRL
+    _extension_path = ('tbs_cert_list', 'crl_extensions')
+    _extension_value_attributes = (
+        '_issuer_alt_name_value',
+        '_crl_number_value',
+        '_delta_crl_indicator_value',
+        '_issuing_distribution_point_value',
+        '_authority_key_identifier_value',
+        '_freshest_crl_value',
+        '_authority_information_access_value',
+    )
+
     _issuer_cert_urls = None
     _delta_crl_distribution_points = None
     _sha1 = None
@@ -307,34 +293,12 @@ class CertificateList(Sequence):
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; convenience attributes retain "last item
+        wins" semantics consistent with the report's effective entry.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['tbs_cert_list']['crl_extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def issuer_alt_name_value(self):
@@ -346,8 +310,7 @@ class CertificateList(Sequence):
             None or an x509.GeneralNames object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._issuer_alt_name_value
 
     @property
@@ -360,8 +323,7 @@ class CertificateList(Sequence):
             None or an Integer object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._crl_number_value
 
     @property
@@ -374,8 +336,7 @@ class CertificateList(Sequence):
             None or an Integer object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._delta_crl_indicator_value
 
     @property
@@ -388,8 +349,7 @@ class CertificateList(Sequence):
             None or an IssuingDistributionPoint object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._issuing_distribution_point_value
 
     @property
@@ -402,8 +362,7 @@ class CertificateList(Sequence):
             None or an AuthorityKeyIdentifier object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._authority_key_identifier_value
 
     @property
@@ -416,8 +375,7 @@ class CertificateList(Sequence):
             None or a CRLDistributionPoints object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._freshest_crl_value
 
     @property
@@ -430,8 +388,7 @@ class CertificateList(Sequence):
             None or an AuthorityInfoAccessSyntax object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._authority_information_access_value
 
     @property

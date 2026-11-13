@@ -1,5 +1,23 @@
 # changelog
 
+## Unreleased
+
+ - Added a unified `extension_checks` report to `x509.Certificate`,
+   `crl.CertificateList`, `crl.RevokedCertificate`, `ocsp.OCSPRequest`,
+   `ocsp.Request`, `ocsp.OCSPResponse` and `ocsp.SingleResponse`. The report
+   keeps the original extensions and their ordering, and exposes every
+   duplicate OID with its positions, distinguishing identical duplicates,
+   critical-flag conflicts and differing values for both known and unknown OIDs
+ - Convenience extension properties retain their "last item wins" behavior but
+   now share the conflict-aware processing of `extension_checks`, so the
+   effective value they return always matches the report
+ - Fixed stale cached extension values after replacing an `extn_value`,
+   editing its parsed child, deleting a duplicate, or modifying only a deep
+   copy; each extension layer is now re-validated from its live contents
+   without dumping and reloading the whole object
+ - Fixed in-place edits to a `ParsableOctetString.parsed` child not being
+   reflected when an enclosing object was re-encoded
+
 ## 1.5.1
 
  - Handle RSASSA-PSS in `keys.PrivateKeyInfo.bit_size` and

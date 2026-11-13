@@ -25,6 +25,7 @@ import sys
 import unicodedata
 
 from ._errors import unwrap
+from ._extension_checks import ExtensionHostMixin, SCOPE_CERTIFICATE
 from ._iri import iri_to_uri, uri_to_iri
 from ._ordereddict import OrderedDict
 from ._types import type_name, str_cls, byte_cls, bytes_to_list
@@ -2159,35 +2160,38 @@ class TbsCertificate(Sequence):
     ]
 
 
-class Certificate(Sequence):
+class Certificate(ExtensionHostMixin, Sequence):
     _fields = [
         ('tbs_certificate', TbsCertificate),
         ('signature_algorithm', SignedDigestAlgorithm),
         ('signature_value', OctetBitString),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _subject_directory_attributes_value = None
-    _key_identifier_value = None
-    _key_usage_value = None
-    _subject_alt_name_value = None
-    _issuer_alt_name_value = None
-    _basic_constraints_value = None
-    _name_constraints_value = None
-    _crl_distribution_points_value = None
-    _certificate_policies_value = None
-    _policy_mappings_value = None
-    _authority_key_identifier_value = None
-    _policy_constraints_value = None
-    _freshest_crl_value = None
-    _inhibit_any_policy_value = None
-    _extended_key_usage_value = None
-    _authority_information_access_value = None
-    _subject_information_access_value = None
-    _private_key_usage_period_value = None
-    _tls_feature_value = None
-    _ocsp_no_check_value = None
+    _extension_scope = SCOPE_CERTIFICATE
+    _extension_path = ('tbs_certificate', 'extensions')
+    _extension_value_attributes = (
+        '_subject_directory_attributes_value',
+        '_key_identifier_value',
+        '_key_usage_value',
+        '_subject_alt_name_value',
+        '_issuer_alt_name_value',
+        '_basic_constraints_value',
+        '_name_constraints_value',
+        '_crl_distribution_points_value',
+        '_certificate_policies_value',
+        '_policy_mappings_value',
+        '_authority_key_identifier_value',
+        '_policy_constraints_value',
+        '_freshest_crl_value',
+        '_inhibit_any_policy_value',
+        '_extended_key_usage_value',
+        '_authority_information_access_value',
+        '_subject_information_access_value',
+        '_private_key_usage_period_value',
+        '_tls_feature_value',
+        '_ocsp_no_check_value',
+    )
+
     _issuer_serial = None
     _authority_issuer_serial = False
     _crl_distribution_points = None
@@ -2202,34 +2206,14 @@ class Certificate(Sequence):
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions, retaining the original extensions and their
+        ordering. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; the convenience attributes keep their
+        historical "last item wins" behavior and are always consistent with the
+        effective entry recorded there.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['tbs_certificate']['extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def private_key_usage_period_value(self):
@@ -2241,8 +2225,7 @@ class Certificate(Sequence):
             None or a PrivateKeyUsagePeriod object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._private_key_usage_period_value
 
     @property
@@ -2255,8 +2238,7 @@ class Certificate(Sequence):
             None or a SubjectDirectoryAttributes object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._subject_directory_attributes_value
 
     @property
@@ -2270,8 +2252,7 @@ class Certificate(Sequence):
             None or an OctetString object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._key_identifier_value
 
     @property
@@ -2284,8 +2265,7 @@ class Certificate(Sequence):
             None or a KeyUsage
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._key_usage_value
 
     @property
@@ -2300,8 +2280,7 @@ class Certificate(Sequence):
             None or a GeneralNames object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._subject_alt_name_value
 
     @property
@@ -2314,8 +2293,7 @@ class Certificate(Sequence):
             None or an x509.GeneralNames object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._issuer_alt_name_value
 
     @property
@@ -2329,8 +2307,7 @@ class Certificate(Sequence):
             None or a BasicConstraints object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._basic_constraints_value
 
     @property
@@ -2343,8 +2320,7 @@ class Certificate(Sequence):
             None or a NameConstraints object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._name_constraints_value
 
     @property
@@ -2357,8 +2333,7 @@ class Certificate(Sequence):
             extension
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._crl_distribution_points_value
 
     @property
@@ -2373,8 +2348,7 @@ class Certificate(Sequence):
             None or a CertificatePolicies object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._certificate_policies_value
 
     @property
@@ -2388,8 +2362,7 @@ class Certificate(Sequence):
             None or a PolicyMappings object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._policy_mappings_value
 
     @property
@@ -2402,8 +2375,7 @@ class Certificate(Sequence):
             None or an AuthorityKeyIdentifier object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._authority_key_identifier_value
 
     @property
@@ -2416,8 +2388,7 @@ class Certificate(Sequence):
             None or a PolicyConstraints object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._policy_constraints_value
 
     @property
@@ -2429,8 +2400,7 @@ class Certificate(Sequence):
             None or an CRLDistributionPoints object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._freshest_crl_value
 
     @property
@@ -2443,8 +2413,7 @@ class Certificate(Sequence):
             None or a Integer object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._inhibit_any_policy_value
 
     @property
@@ -2457,8 +2426,7 @@ class Certificate(Sequence):
             None or an ExtKeyUsageSyntax object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._extended_key_usage_value
 
     @property
@@ -2471,8 +2439,7 @@ class Certificate(Sequence):
             None or an AuthorityInfoAccessSyntax object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._authority_information_access_value
 
     @property
@@ -2485,8 +2452,7 @@ class Certificate(Sequence):
             None or a SubjectInfoAccessSyntax object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._subject_information_access_value
 
     @property
@@ -2499,8 +2465,7 @@ class Certificate(Sequence):
             None or a Features object
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._tls_feature_value
 
     @property
@@ -2514,8 +2479,7 @@ class Certificate(Sequence):
             None or a Null object (if present)
         """
 
-        if not self._processed_extensions:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._ocsp_no_check_value
 
     @property

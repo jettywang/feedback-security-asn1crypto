@@ -2726,6 +2726,81 @@ class IntegerOctetString(Constructable, Castable, Primitive):
             self.set(self.native)
 
 
+def _value_is_mutated(value):
+    """
+    Recursively checks a parsed value for pending mutations. This descends into
+    child Sequence and SequenceOf objects so that editing a deeply nested field
+    of an object stored in a ParsableOctetString is detected, even when an
+    intermediate container was never marked as mutated itself.
+
+    :param value:
+        An asn1crypto.core.Asn1Value object
+
+    :return:
+        A boolean - if the value or any of its children has been mutated
+    """
+
+    if isinstance(value, (Sequence, SequenceOf)):
+        if value._mutated:
+            return True
+        if value.children is None:
+            return False
+        for child in value.children:
+            if child.__class__ == tuple:
+                continue
+            if isinstance(child, ParsableOctetString):
+                if child._parsed_is_mutated():
+                    return True
+            elif isinstance(child, (Sequence, SequenceOf)) and _value_is_mutated(child):
+                return True
+    return False
+
+
+def _clear_mutation_flags(value):
+    """
+    Resets the _mutated flag on a value and every Sequence/SequenceOf child,
+    matching the state the objects would have after their contents were
+    re-encoded by _set_contents().
+
+    :param value:
+        An asn1crypto.core.Asn1Value object
+    """
+
+    if isinstance(value, (Sequence, SequenceOf)):
+        value._mutated = False
+        if value.children is None:
+            return
+        for child in value.children:
+            if child.__class__ == tuple:
+                continue
+            if isinstance(child, ParsableOctetString):
+                if child._parsed is not None:
+                    _clear_mutation_flags(child._parsed[0])
+            else:
+                _clear_mutation_flags(child)
+
+
+def _clear_parsed_dirty_flags(value):
+    """
+    Clears the _parsed_dirty marker on every ParsableOctetString within a
+    container tree. Called once a container has re-encoded its contents from
+    its children, so the marker does not keep forcing redundant re-encoding.
+
+    :param value:
+        An asn1crypto.core.Sequence or asn1crypto.core.SequenceOf object
+    """
+
+    if value.children is None:
+        return
+    for child in value.children:
+        if child.__class__ == tuple:
+            continue
+        if isinstance(child, ParsableOctetString):
+            child._parsed_dirty = False
+        elif isinstance(child, (Sequence, SequenceOf)):
+            _clear_parsed_dirty_flags(child)
+
+
 class ParsableOctetString(Constructable, Castable, Primitive):
 
     tag = 4
@@ -2734,6 +2809,12 @@ class ParsableOctetString(Constructable, Castable, Primitive):
 
     # Instance attribute of (possibly-merged) byte string
     _bytes = None
+
+    # True when the parsed child was edited and the new bytes were synced into
+    # this object but an enclosing Sequence/SequenceOf has not re-encoded its
+    # own cached contents yet. Primitive values have no _mutated flag, so this
+    # lets parent containers detect the pending change.
+    _parsed_dirty = False
 
     def __init__(self, value=None, parsed=None, **kwargs):
         """
@@ -2779,11 +2860,64 @@ class ParsableOctetString(Constructable, Castable, Primitive):
         self._bytes = value
         self.contents = value
         self._header = None
+        # Raw bytes now define the value, so any cached parsed object and
+        # pending parsed-edit marker are stale and must be rebuilt on demand.
+        self._parsed = None
+        self._parsed_dirty = False
         if self._indefinite:
             self._indefinite = False
             self.method = 0
         if self._trailer != b'':
             self._trailer = b''
+
+    def _parsed_is_mutated(self):
+        """
+        Checks if a previously parsed child object no longer matches the cached
+        byte string. The check compares a fresh DER encoding of the parsed
+        object against the cached bytes instead of relying solely on _mutated
+        flags, since those flags are consumed whenever an enclosing sequence
+        re-encodes its contents.
+
+        :return:
+            A boolean - if the parsed value contains pending changes
+        """
+
+        if self._parsed is None:
+            return False
+
+        parsed_value = self._parsed[0]
+        if not isinstance(parsed_value, (Sequence, SequenceOf)):
+            return False
+
+        if _value_is_mutated(parsed_value):
+            return True
+
+        # A parent may already have consumed the parsed tree's _mutated flags
+        # during an earlier dump, so fall back to comparing the encoding.
+        return parsed_value.dump() != self._bytes
+
+    def _sync_parsed_bytes(self):
+        """
+        Re-encodes a parsed child back into the cached byte string and contents
+        so in-place edits to .parsed are reflected without requiring the caller
+        to dump and reload the entire enclosing object.
+        """
+
+        parsed_bytes = self._parsed[0].dump()
+        if self._bytes != parsed_bytes:
+            self._bytes = parsed_bytes
+            self.contents = parsed_bytes
+            # Force Asn1Value.dump() to rebuild the TLV header instead of
+            # reusing a header cached for the previous contents.
+            self._header = None
+            if self._trailer != b'':
+                self._trailer = b''
+            # The enclosing containers still hold contents encoded from the
+            # previous bytes, so mark this object dirty until they re-encode.
+            self._parsed_dirty = True
+        # The parsed tree has now been re-encoded into this object, so any
+        # mutation flags consumed by the dump above are resolved.
+        _clear_mutation_flags(self._parsed[0])
 
     def parse(self, spec=None, spec_params=None):
         """
@@ -2816,6 +2950,8 @@ class ParsableOctetString(Constructable, Castable, Primitive):
 
         if self.contents is None:
             return b''
+        if self._parsed_is_mutated():
+            self._sync_parsed_bytes()
         if self._bytes is None:
             self._bytes = self._merge_chunks()
         return self._bytes
@@ -2845,6 +2981,10 @@ class ParsableOctetString(Constructable, Castable, Primitive):
         super(ParsableOctetString, self)._copy(other, copy_func)
         self._bytes = other._bytes
         self._parsed = copy_func(other._parsed)
+        # The copy's parsed object and cached bytes start in sync, and any
+        # enclosing containers were copied alongside it; the source's dirty
+        # marker must not force a redundant re-encoding of the copy.
+        self._parsed_dirty = False
 
     @property
     def native(self):
@@ -2900,6 +3040,8 @@ class ParsableOctetString(Constructable, Castable, Primitive):
                 native = self.native
             self.contents = None
             self.set(native)
+        elif self._parsed is not None and self._parsed_is_mutated():
+            self._sync_parsed_bytes()
 
         return Asn1Value.dump(self)
 
@@ -3489,7 +3631,13 @@ class Sequence(Asn1Value):
         mutated = self._mutated
         if self.children is not None:
             for child in self.children:
-                if isinstance(child, Sequence) or isinstance(child, SequenceOf):
+                if isinstance(child, ParsableOctetString):
+                    # A ParsableOctetString is a Primitive, so it would not be
+                    # visited by the Sequence/SequenceOf branch below; surface
+                    # both in-place edits through .parsed and bytes synced but
+                    # not yet propagated up to this container.
+                    mutated = mutated or child._parsed_dirty or child._parsed_is_mutated()
+                elif isinstance(child, Sequence) or isinstance(child, SequenceOf):
                     mutated = mutated or child._is_mutated()
 
         return mutated
@@ -3703,6 +3851,7 @@ class Sequence(Asn1Value):
             contents.write(child_dump)
         self._contents = contents.getvalue()
         self._mutated = False
+        _clear_parsed_dirty_flags(self)
 
         self._header = None
         if self._trailer != b'':
@@ -4107,6 +4256,11 @@ class Sequence(Asn1Value):
                     self.children.append(child)
                 else:
                     self.children.append(child.copy())
+            # Re-evaluate the mutation flag against this copy's independent
+            # children. The encoded contents inherited from the source may
+            # predate an in-place edit to a parsed child, so a pending mutation
+            # in the copy must force re-encoding on the next contents access.
+            self._mutated = self._is_mutated()
 
     def debug(self, nest_level=1):
         """
@@ -4264,7 +4418,13 @@ class SequenceOf(Asn1Value):
         mutated = self._mutated
         if self.children is not None:
             for child in self.children:
-                if isinstance(child, Sequence) or isinstance(child, SequenceOf):
+                if isinstance(child, ParsableOctetString):
+                    # A ParsableOctetString is a Primitive, so it would not be
+                    # visited by the Sequence/SequenceOf branch below; surface
+                    # both in-place edits through .parsed and bytes synced but
+                    # not yet propagated up to this container.
+                    mutated = mutated or child._parsed_dirty or child._parsed_is_mutated()
+                elif isinstance(child, Sequence) or isinstance(child, SequenceOf):
                     mutated = mutated or child._is_mutated()
 
         return mutated
@@ -4488,6 +4648,7 @@ class SequenceOf(Asn1Value):
             contents.write(child.dump(force=force))
         self._contents = contents.getvalue()
         self._mutated = False
+        _clear_parsed_dirty_flags(self)
         self._header = None
         if self._trailer != b'':
             self._trailer = b''
@@ -4583,6 +4744,11 @@ class SequenceOf(Asn1Value):
                     self.children.append(child)
                 else:
                     self.children.append(child.copy())
+            # Re-evaluate the mutation flag against this copy's independent
+            # children. The encoded contents inherited from the source may
+            # predate an in-place edit to a parsed child, so a pending mutation
+            # in the copy must force re-encoding on the next contents access.
+            self._mutated = self._is_mutated()
 
     def debug(self, nest_level=1):
         """

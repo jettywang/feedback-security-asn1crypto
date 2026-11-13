@@ -13,6 +13,13 @@ Other type classes are defined that help compose the types listed above.
 from __future__ import unicode_literals, division, absolute_import, print_function
 
 from ._errors import unwrap
+from ._extension_checks import (
+    ExtensionHostMixin,
+    SCOPE_OCSP_REQUEST,
+    SCOPE_OCSP_RESPONSE,
+    SCOPE_OCSP_SINGLE_REQUEST,
+    SCOPE_OCSP_SINGLE_RESPONSE,
+)
 from .algos import DigestAlgorithm, SignedDigestAlgorithm
 from .core import (
     Boolean,
@@ -82,47 +89,27 @@ class RequestExtensions(SequenceOf):
     _child_spec = RequestExtension
 
 
-class Request(Sequence):
+class Request(ExtensionHostMixin, Sequence):
     _fields = [
         ('req_cert', CertId),
         ('single_request_extensions', RequestExtensions, {'explicit': 0, 'optional': True}),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _service_locator_value = None
+    _extension_scope = SCOPE_OCSP_SINGLE_REQUEST
+    _extension_path = ('single_request_extensions',)
+    _extension_value_attributes = (
+        '_service_locator_value',
+    )
 
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; convenience attributes retain "last item
+        wins" semantics consistent with the report's effective entry.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['single_request_extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def service_locator_value(self):
@@ -134,8 +121,7 @@ class Request(Sequence):
             None or a ServiceLocator object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._service_locator_value
 
 
@@ -212,49 +198,29 @@ class Signature(Sequence):
     ]
 
 
-class OCSPRequest(Sequence):
+class OCSPRequest(ExtensionHostMixin, Sequence):
     _fields = [
         ('tbs_request', TBSRequest),
         ('optional_signature', Signature, {'explicit': 0, 'optional': True}),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _nonce_value = None
-    _acceptable_responses_value = None
-    _preferred_signature_algorithms_value = None
+    _extension_scope = SCOPE_OCSP_REQUEST
+    _extension_path = ('tbs_request', 'request_extensions')
+    _extension_value_attributes = (
+        '_nonce_value',
+        '_acceptable_responses_value',
+        '_preferred_signature_algorithms_value',
+    )
 
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; convenience attributes retain "last item
+        wins" semantics consistent with the report's effective entry.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['tbs_request']['request_extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def nonce_value(self):
@@ -266,8 +232,7 @@ class OCSPRequest(Sequence):
             None or an OctetString object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._nonce_value
 
     @property
@@ -281,8 +246,7 @@ class OCSPRequest(Sequence):
             None or an AcceptableResponses object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._acceptable_responses_value
 
     @property
@@ -297,8 +261,7 @@ class OCSPRequest(Sequence):
             None or a PreferredSignatureAlgorithms object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._preferred_signature_algorithms_value
 
 
@@ -429,7 +392,7 @@ class SingleResponseExtensions(SequenceOf):
     _child_spec = SingleResponseExtension
 
 
-class SingleResponse(Sequence):
+class SingleResponse(ExtensionHostMixin, Sequence):
     _fields = [
         ('cert_id', CertId),
         ('cert_status', CertStatus),
@@ -438,45 +401,25 @@ class SingleResponse(Sequence):
         ('single_extensions', SingleResponseExtensions, {'explicit': 1, 'optional': True}),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _crl_value = None
-    _archive_cutoff_value = None
-    _crl_reason_value = None
-    _invalidity_date_value = None
-    _certificate_issuer_value = None
+    _extension_scope = SCOPE_OCSP_SINGLE_RESPONSE
+    _extension_path = ('single_extensions',)
+    _extension_value_attributes = (
+        '_crl_value',
+        '_archive_cutoff_value',
+        '_crl_reason_value',
+        '_invalidity_date_value',
+        '_certificate_issuer_value',
+    )
 
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; convenience attributes retain "last item
+        wins" semantics consistent with the report's effective entry.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['single_extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def crl_value(self):
@@ -488,8 +431,7 @@ class SingleResponse(Sequence):
             None or a CrlId object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._crl_value
 
     @property
@@ -502,8 +444,7 @@ class SingleResponse(Sequence):
             None or a GeneralizedTime object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._archive_cutoff_value
 
     @property
@@ -515,8 +456,7 @@ class SingleResponse(Sequence):
             None or a CRLReason object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._crl_reason_value
 
     @property
@@ -531,8 +471,7 @@ class SingleResponse(Sequence):
             None or a GeneralizedTime object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._invalidity_date_value
 
     @property
@@ -544,8 +483,7 @@ class SingleResponse(Sequence):
             None or an x509.GeneralNames object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._certificate_issuer_value
 
 
@@ -609,48 +547,34 @@ class ResponseBytes(Sequence):
     }
 
 
-class OCSPResponse(Sequence):
+class OCSPResponse(ExtensionHostMixin, Sequence):
     _fields = [
         ('response_status', OCSPResponseStatus),
         ('response_bytes', ResponseBytes, {'explicit': 0, 'optional': True}),
     ]
 
-    _processed_extensions = False
-    _critical_extensions = None
-    _nonce_value = None
-    _extended_revoke_value = None
+    _extension_scope = SCOPE_OCSP_RESPONSE
+    _extension_path = (
+        'response_bytes',
+        'response',
+        '#parsed',
+        'tbs_response_data',
+        'response_extensions',
+    )
+    _extension_value_attributes = (
+        '_nonce_value',
+        '_extended_revoke_value',
+    )
 
     def _set_extensions(self):
         """
         Sets common named extensions to private attributes and creates a list
-        of critical extensions
+        of critical extensions. Duplicate OIDs and conflicts are exposed through
+        :attr:`extension_checks`; convenience attributes retain "last item
+        wins" semantics consistent with the report's effective entry.
         """
 
-        self._critical_extensions = set()
-
-        for extension in self['response_bytes']['response'].parsed['tbs_response_data']['response_extensions']:
-            name = extension['extn_id'].native
-            attribute_name = '_%s_value' % name
-            if hasattr(self, attribute_name):
-                setattr(self, attribute_name, extension['extn_value'].parsed)
-            if extension['critical'].native:
-                self._critical_extensions.add(name)
-
-        self._processed_extensions = True
-
-    @property
-    def critical_extensions(self):
-        """
-        Returns a set of the names (or OID if not a known extension) of the
-        extensions marked as critical
-
-        :return:
-            A set of unicode strings
-        """
-
-        if not self._processed_extensions:
-            self._set_extensions()
-        return self._critical_extensions
+        ExtensionHostMixin._set_extensions(self)
 
     @property
     def nonce_value(self):
@@ -662,8 +586,7 @@ class OCSPResponse(Sequence):
             None or an OctetString object
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._nonce_value
 
     @property
@@ -676,8 +599,7 @@ class OCSPResponse(Sequence):
             None or a Null object (if present)
         """
 
-        if self._processed_extensions is False:
-            self._set_extensions()
+        self._ensure_extensions_processed()
         return self._extended_revoke_value
 
     @property

@@ -1,0 +1,359 @@
+{
+  "fixtures": {
+    "chain_link_wrong_digest": {
+      "chains": 2,
+      "description": "hash tree renewal does not cover the previous chains",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-01-01T00:00:00+00:00",
+          "imprint_digest": "d526feb470be0cbb13823eb7563701aec074ba5511199a9b89576005314751b4",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2025-01-01T00:00:00+00:00",
+          "imprint_digest": "e66faeb0d684deba7680a7584d895026528466d4acf692ba9dfe410e639f46be",
+          "previous_chains_digest": null,
+          "previous_token_digest": "e66faeb0d684deba7680a7584d895026528466d4acf692ba9dfe410e639f46be",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 1,
+          "entry_index": 0,
+          "gen_time": "2026-01-01T00:00:00+00:00",
+          "imprint_digest": "a9617c2d67c26ba7fac8b5bcd0beb77de43c580775768cbd124ddf6eea380c24",
+          "previous_chains_digest": "41e907ccb8a64f9cd62ebd908f63b039190f240231965f00bde110a8c40b6ef8",
+          "previous_token_digest": null,
+          "rebuilt_root": "a9617c2d67c26ba7fac8b5bcd0beb77de43c580775768cbd124ddf6eea380c24",
+          "renewal": "hash_tree"
+        }
+      ],
+      "errors": [
+        {
+          "chain_index": 1,
+          "code": "renewal_digest_mismatch",
+          "entry_index": 0
+        }
+      ],
+      "status": "fail",
+      "warnings": []
+    },
+    "digest_valid_out_of_order": {
+      "chains": 1,
+      "description": "digest chain is valid, but the generation times decrease within the chain",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-05-01T00:00:00+00:00",
+          "imprint_digest": "90b9265664fde8e476261035819b37195ea9d785e9c9ad7d0787b54a0a8effbd",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2024-03-01T00:00:00+00:00",
+          "imprint_digest": "5f272213ef14c98fd20cf82f43af5abd4f2381728e4c807da3d58b1be7334182",
+          "previous_chains_digest": null,
+          "previous_token_digest": "5f272213ef14c98fd20cf82f43af5abd4f2381728e4c807da3d58b1be7334182",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 2,
+          "gen_time": "2024-04-01T00:00:00+00:00",
+          "imprint_digest": "f3e5429f440c01ebebece4cb6c5af4cf287491db8108502142d91e980c281342",
+          "previous_chains_digest": null,
+          "previous_token_digest": "f3e5429f440c01ebebece4cb6c5af4cf287491db8108502142d91e980c281342",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        }
+      ],
+      "errors": [
+        {
+          "chain_index": 0,
+          "code": "timestamp_order",
+          "entry_index": 1
+        }
+      ],
+      "status": "fail",
+      "warnings": []
+    },
+    "hash_tree_algorithm_change": {
+      "chains": 2,
+      "description": "hash tree renewal that switches the digest algorithm from sha256 to sha384",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-01-01T00:00:00+00:00",
+          "imprint_digest": "1ddc78a8692da613791b25573c4a37bb7bb85440132a92d232d79d872744a83b",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2025-01-01T00:00:00+00:00",
+          "imprint_digest": "6aed979202393cc2bdac98c03e9b87321d866a4cc2a29e4e750ada04a53b8dd3",
+          "previous_chains_digest": null,
+          "previous_token_digest": "6aed979202393cc2bdac98c03e9b87321d866a4cc2a29e4e750ada04a53b8dd3",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        },
+        {
+          "algorithm": "sha384",
+          "algorithm_source": "explicit",
+          "chain_index": 1,
+          "entry_index": 0,
+          "gen_time": "2026-01-01T00:00:00+00:00",
+          "imprint_digest": "7b2f4d3a378d8ccea0e07b078ea71e8c8800924c662d7c39e24984f5febcf4ec53a30c6fc6f399192056fd7c3f716e77",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "hash_tree"
+        }
+      ],
+      "errors": [],
+      "status": "unverified",
+      "warnings": [
+        {
+          "chain_index": 1,
+          "code": "hash_tree_algorithm_change_unverified",
+          "entry_index": 0
+        }
+      ]
+    },
+    "single_chain_two_renewals": {
+      "chains": 1,
+      "description": "single chain, initial timestamp plus two timestamp renewals",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-01-01T00:00:00+00:00",
+          "imprint_digest": "c70efa6cf17e4289948d8d8c9cd1945f4de550082dae3108740b6a5c4faa0e91",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2025-01-01T00:00:00+00:00",
+          "imprint_digest": "26f422f679347ae77ebadf712a289ab4786952a5b1e6ce46fba7f1f2680276c9",
+          "previous_chains_digest": null,
+          "previous_token_digest": "26f422f679347ae77ebadf712a289ab4786952a5b1e6ce46fba7f1f2680276c9",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 2,
+          "gen_time": "2026-01-01T00:00:00+00:00",
+          "imprint_digest": "f6d86d231679e60d81ba4e861f01f73c4a94ffd7d2732c52db554a08b1bd9101",
+          "previous_chains_digest": null,
+          "previous_token_digest": "f6d86d231679e60d81ba4e861f01f73c4a94ffd7d2732c52db554a08b1bd9101",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        }
+      ],
+      "errors": [],
+      "status": "pass",
+      "warnings": []
+    },
+    "timestamp_renewal_wrong_digest": {
+      "chains": 1,
+      "description": "second timestamp renews a digest that does not cover the first timestamp token",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-01-01T00:00:00+00:00",
+          "imprint_digest": "6cde8343d9e13465cde8d5c7f9ecba4c548a8fb0f1c64ae517b0e734d201c53f",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2025-01-01T00:00:00+00:00",
+          "imprint_digest": "22dd8da752ff95ee963554c1eee3c12832d7a08257392a035021b617dd84507f",
+          "previous_chains_digest": null,
+          "previous_token_digest": "65d59728c84bef4eaf817088ef5cfaf1c213b1ef552a1bf1b68da10dbc96f802",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        }
+      ],
+      "errors": [
+        {
+          "chain_index": 0,
+          "code": "renewal_digest_mismatch",
+          "entry_index": 1
+        }
+      ],
+      "status": "fail",
+      "warnings": []
+    },
+    "tree_path_altered": {
+      "chains": 2,
+      "description": "hash tree renewal whose reduced path sibling was altered after the timestamp was issued",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-01-01T00:00:00+00:00",
+          "imprint_digest": "df4c1bd23aa4cb26459a248880772de592b9bd5ddc9b1cbf428e5afa0d71de54",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2025-01-01T00:00:00+00:00",
+          "imprint_digest": "87c83d027c71626ff514cb44a8d4da46bbeaeb713c3cd8b7f80955b1a59c82af",
+          "previous_chains_digest": null,
+          "previous_token_digest": "87c83d027c71626ff514cb44a8d4da46bbeaeb713c3cd8b7f80955b1a59c82af",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 1,
+          "entry_index": 0,
+          "gen_time": "2026-01-01T00:00:00+00:00",
+          "imprint_digest": "af6b4388bd673661cd15197583404a151c0e4e236c0d851ceaa76e125fdb731b",
+          "previous_chains_digest": "718f1fb3a39bb1e1fc5b30e28a56b5312de82467de08d663cff33de68edafa21",
+          "previous_token_digest": null,
+          "rebuilt_root": "9775990ef85c02abdcfcb7ec19bca45b16853d7f05bb39b317933d358ecd6cfe",
+          "renewal": "hash_tree"
+        }
+      ],
+      "errors": [
+        {
+          "chain_index": 1,
+          "code": "renewal_digest_mismatch",
+          "entry_index": 0
+        }
+      ],
+      "status": "fail",
+      "warnings": []
+    },
+    "two_chains": {
+      "chains": 2,
+      "description": "two chains: timestamp renewal, then hash tree renewal with a reduced hash tree",
+      "entries": [
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 0,
+          "entry_index": 0,
+          "gen_time": "2024-01-01T00:00:00+00:00",
+          "imprint_digest": "7a121a8b65c87efc3b1f28ddcb36c2211f376fd0e1ed8a2932923d30d38e69b7",
+          "previous_chains_digest": null,
+          "previous_token_digest": null,
+          "rebuilt_root": null,
+          "renewal": "initial"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 0,
+          "entry_index": 1,
+          "gen_time": "2025-01-01T00:00:00+00:00",
+          "imprint_digest": "6d750d8b415966abb58317e659c6f0664a347fddd772fe97db7dbebddd48733d",
+          "previous_chains_digest": null,
+          "previous_token_digest": "6d750d8b415966abb58317e659c6f0664a347fddd772fe97db7dbebddd48733d",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "explicit",
+          "chain_index": 1,
+          "entry_index": 0,
+          "gen_time": "2026-01-01T00:00:00+00:00",
+          "imprint_digest": "2c7de20e4eeaee30782e05be45c0851b0b6a6eba617b0d643716cb80b8876ae0",
+          "previous_chains_digest": "b5072de492dd4afb7306595af1b4fd5a582f68f25384ec99201595255dad75f8",
+          "previous_token_digest": null,
+          "rebuilt_root": "2c7de20e4eeaee30782e05be45c0851b0b6a6eba617b0d643716cb80b8876ae0",
+          "renewal": "hash_tree"
+        },
+        {
+          "algorithm": "sha256",
+          "algorithm_source": "derived",
+          "chain_index": 1,
+          "entry_index": 1,
+          "gen_time": "2027-01-01T00:00:00+00:00",
+          "imprint_digest": "3faf6e862180b47f7c4ea164ced69d886c9e65563003066389696d1765596335",
+          "previous_chains_digest": null,
+          "previous_token_digest": "3faf6e862180b47f7c4ea164ced69d886c9e65563003066389696d1765596335",
+          "rebuilt_root": null,
+          "renewal": "timestamp"
+        }
+      ],
+      "errors": [],
+      "status": "pass",
+      "warnings": []
+    }
+  },
+  "legacy_flat": {
+    "chains": 1,
+    "description": "flat SEQUENCE OF ArchiveTimeStamp and its explicit single-chain migration",
+    "entries": 2,
+    "flat_der": "legacy_flat_sequence.der",
+    "migrated_der": "legacy_flat_migrated.der",
+    "previous_token_digest": "33deb74b6939ac9918e89797cd3bdcb22dd5925b982ffaf6f7f812282b9c098d",
+    "status": "pass"
+  },
+  "note": "All digest expectations were computed by generate.py with hashlib, independently of asn1crypto.ers."
+}

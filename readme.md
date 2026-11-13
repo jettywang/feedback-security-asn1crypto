@@ -55,6 +55,7 @@ a bunch of ASN.1 structures for use with various common cryptography standards:
 | PKCS#5 v2.1            | [`asn1crypto.algos`](asn1crypto/algos.py)   | [PKCS#5 v2.1](http://www.emc.com/collateral/white-papers/h11302-pkcs5v2-1-password-based-cryptography-standard-wp.pdf) |
 | CMS (and PKCS#7)       | [`asn1crypto.cms`](asn1crypto/cms.py)       | [RFC 5652](https://tools.ietf.org/html/rfc5652), [RFC 2315](https://tools.ietf.org/html/rfc2315)                       |
 | TSP                    | [`asn1crypto.tsp`](asn1crypto/tsp.py)       | [RFC 3161](https://tools.ietf.org/html/rfc3161)                                                                        |
+| Evidence Record Syntax | [`asn1crypto.ers`](asn1crypto/ers.py)       | [RFC 4998](https://tools.ietf.org/html/rfc4998)                                                                        |
 | PDF signatures         | [`asn1crypto.pdf`](asn1crypto/pdf.py)       | [PDF 1.7](http://wwwimages.adobe.com/content/dam/Adobe/en/devnet/pdf/pdfs/PDF32000_2008.pdf)                           |
 
 ## Why Another Python ASN.1 Library?
@@ -170,6 +171,7 @@ links to the source for the various pre-defined type classes.
  - [Private key/certificate containers (PKCS#12)](asn1crypto/pkcs12.py), `asn1crypto.pkcs12`
  - [Cryptographic message syntax (CMS, PKCS#7)](asn1crypto/cms.py), `asn1crypto.cms`
  - [Time stamp protocol (TSP)](asn1crypto/tsp.py), `asn1crypto.tsp`
+ - [Evidence Record Syntax (ERS) chain checks](asn1crypto/ers.py), `asn1crypto.ers`
  - [PDF signatures](asn1crypto/pdf.py), `asn1crypto.pdf`
 
 ## Continuous Integration

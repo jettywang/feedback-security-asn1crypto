@@ -1,5 +1,21 @@
 # changelog
 
+## Unreleased
+
+ - Fixed `tsp.EvidenceRecord` to model the RFC 4998
+   `ArchiveTimeStampSequence` as a sequence of `ArchiveTimeStampChain`
+   values instead of a flat sequence of `ArchiveTimeStamp` values. The new
+   `tsp.ArchiveTimeStampChain` type is exported. Flat pre-change encodings
+   must be migrated explicitly with
+   `tsp.ArchiveTimeStampSequence.from_legacy_flat_der()`, which places the
+   entries in a single chain because the old layout did not record chain
+   boundaries.
+ - Added `asn1crypto.ers` with `check_evidence_record()` and `check_der()`
+   for offline RFC 4998 archive time stamp chain checks. Findings carry the
+   chain and entry index, and distinguish chain breaks, structural errors and
+   checks that could not be verified offline. CMS signature trust is reported
+   separately and never contributes to the chain status.
+
 ## 1.5.1
 
  - Handle RSASSA-PSS in `keys.PrivateKeyInfo.bit_size` and

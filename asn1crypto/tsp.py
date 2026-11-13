@@ -208,8 +208,75 @@ class ArchiveTimeStamp(Sequence):
     ]
 
 
-class ArchiveTimeStampSequence(SequenceOf):
+class _LegacyArchiveTimeStampSequence(SequenceOf):
     _child_spec = ArchiveTimeStamp
+
+
+class ArchiveTimeStampChain(SequenceOf):
+    _child_spec = ArchiveTimeStamp
+
+
+class ArchiveTimeStampSequence(SequenceOf):
+    _child_spec = ArchiveTimeStampChain
+
+    @classmethod
+    def from_legacy_flat(cls, value):
+        """
+        Builds a layered archive time stamp sequence from the flat layout
+        that was previously modeled by asn1crypto, where the sequence
+        directly contained ArchiveTimeStamp values instead of
+        ArchiveTimeStampChain values
+
+        The old flat layout did not record where chain boundaries were, so
+        all entries are placed into a single chain. Callers that know which
+        algorithm changes split the chains need to construct the
+        ArchiveTimeStampChain objects explicitly instead.
+
+        :param value:
+            An iterable of ArchiveTimeStamp objects (or values accepted by
+            ArchiveTimeStampChain), a legacy flat sequence from
+            from_legacy_flat_der(), or an already-layered value
+
+        :return:
+            An ArchiveTimeStampSequence object
+        """
+
+        entries = list(value)
+        if not entries:
+            return cls()
+        if isinstance(entries[0], ArchiveTimeStampChain):
+            return cls(entries)
+        archive_time_stamps = []
+        for entry in entries:
+            if isinstance(entry, ArchiveTimeStamp):
+                archive_time_stamps.append(entry)
+            else:
+                # A generic core.SequenceOf(spec=ArchiveTimeStamp) load
+                # produces bare core.Sequence children; re-read each entry
+                # with the expected spec without changing its encoding
+                archive_time_stamps.append(ArchiveTimeStamp.load(entry.dump()))
+        return cls([ArchiveTimeStampChain(archive_time_stamps)])
+
+    @classmethod
+    def from_legacy_flat_der(cls, encoded_data):
+        """
+        Parses a DER-encoded SEQUENCE OF ArchiveTimeStamp, the layout that
+        was previously modeled by asn1crypto, and explicitly migrates it to
+        the RFC 4998 layered layout
+
+        This does not guess chain boundaries - the old encoding does not
+        contain them - so the result is always a single chain.
+
+        :param encoded_data:
+            A byte string of the flat DER-encoded archive time stamp
+            sequence
+
+        :return:
+            An ArchiveTimeStampSequence object with one chain
+        """
+
+        legacy = _LegacyArchiveTimeStampSequence.load(encoded_data)
+        return cls.from_legacy_flat(legacy)
 
 
 class EvidenceRecord(Sequence):

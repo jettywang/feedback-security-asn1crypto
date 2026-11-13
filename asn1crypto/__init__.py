@@ -43,5 +43,6 @@ def load_order():
         'asn1crypto.pdf',
         'asn1crypto.pkcs12',
         'asn1crypto.tsp',
+        'asn1crypto.ers',
         'asn1crypto',
     ]

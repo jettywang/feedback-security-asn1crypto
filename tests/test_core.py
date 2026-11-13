@@ -1474,3 +1474,119 @@ class CoreTests(unittest.TestCase):
         self.assertIn(b"unpickle_helper", pickled_bytes)
         unpickled = pickle.loads(pickled_bytes)
         self.assertEqual(orig.native, unpickled.native)
+
+
+class LocalOidContextSeq(core.Sequence):
+    _fields = [
+        ('id', core.ObjectIdentifier),
+        ('value', core.Any),
+    ]
+
+    _oid_pair = ('id', 'value')
+    _oid_specs = {}
+
+
+LOCAL_OID = '1.3.6.1.4.1.44444.3.1'
+
+
+class LocalOidContextInt(core.Integer):
+    pass
+
+
+class LocalOidContextA(core.Sequence):
+    _fields = [
+        ('number', core.Integer),
+        ('nested', LocalOidContextInt, {'optional': True}),
+    ]
+
+
+class LocalOidContextB(core.Sequence):
+    _fields = [
+        ('text', core.UTF8String),
+    ]
+
+
+class LocalOidContextWrapper(core.Sequence):
+    _fields = [
+        ('pair', LocalOidContextSeq),
+    ]
+
+
+class LocalOidContextTests(unittest.TestCase):
+
+    def _der(self, value, oid_specs=None):
+        return LocalOidContextSeq(
+            {'id': LOCAL_OID, 'value': value},
+            oid_specs=oid_specs
+        ).dump()
+
+    def test_class_specific_mapping(self):
+        der = self._der(LocalOidContextA({'number': 5}))
+        specs = {LocalOidContextSeq: {LOCAL_OID: LocalOidContextA}}
+
+        value = LocalOidContextSeq.load(der, oid_specs=specs)
+        self.assertIsInstance(value['value'], LocalOidContextA)
+        self.assertEqual(5, value['value']['number'].native)
+
+        # The class-level registry must not have been modified
+        self.assertNotIn(LOCAL_OID, LocalOidContextSeq._oid_specs)
+
+    def test_generic_oid_mapping(self):
+        der = self._der(LocalOidContextA({'number': 5}))
+        value = LocalOidContextSeq.load(der, oid_specs={LOCAL_OID: LocalOidContextA})
+        self.assertIsInstance(value['value'], LocalOidContextA)
+
+    def test_generic_class_mapping(self):
+        der = self._der(LocalOidContextB({'text': 'hi'}))
+        specs = {None: {LOCAL_OID: LocalOidContextB}}
+        value = LocalOidContextSeq.load(der, oid_specs=specs)
+        self.assertIsInstance(value['value'], LocalOidContextB)
+
+    def test_context_is_snapshotted_and_copyable(self):
+        der = self._der(LocalOidContextA({'number': 5}))
+        specs = {LocalOidContextSeq: {LOCAL_OID: LocalOidContextA}}
+        value = LocalOidContextSeq.load(der, oid_specs=specs)
+
+        specs[LocalOidContextSeq][LOCAL_OID] = LocalOidContextB
+
+        self.assertIsInstance(value['value'], LocalOidContextA)
+        copied = value.copy()
+        self.assertIsInstance(copied['value'], LocalOidContextA)
+        self.assertEqual(der, copied.dump())
+        self.assertEqual(der, copied.dump(force=True))
+
+    def test_nested_and_lazy_children_keep_context(self):
+        der = LocalOidContextWrapper(
+            {'pair': LocalOidContextSeq({'id': LOCAL_OID, 'value': LocalOidContextA({'number': 5})})}
+        ).dump()
+        specs = {LocalOidContextSeq: {LOCAL_OID: LocalOidContextA}}
+
+        wrapper = LocalOidContextWrapper.load(der, oid_specs=specs)
+        specs[LocalOidContextSeq][LOCAL_OID] = LocalOidContextB
+
+        # The nested object is materialized on access using the context
+        # snapshot taken when the outer object was created
+        self.assertIsInstance(wrapper['pair']['value'], LocalOidContextA)
+
+    def test_unknown_oid_preserves_encoding(self):
+        der = self._der(LocalOidContextA({'number': 5}))
+        value = LocalOidContextSeq.load(der)
+        self.assertIsInstance(value['value'].parsed, core.Sequence)
+        self.assertEqual(der, value.dump())
+        self.assertEqual(der, value.dump(force=True))
+
+    def test_public_api_unchanged_without_mapping(self):
+        der = self._der(LocalOidContextA({'number': 5}))
+        self.assertEqual(
+            LocalOidContextSeq.load(der).native,
+            util.OrderedDict([
+                ('id', LOCAL_OID),
+                ('value', util.OrderedDict([('0', 5)])),
+            ])
+        )
+
+    def test_invalid_mapping_rejected(self):
+        with self.assertRaises(TypeError):
+            LocalOidContextSeq.load(self._der(LocalOidContextA({'number': 5})), oid_specs=[])
+        with self.assertRaises(TypeError):
+            LocalOidContextSeq.load(self._der(LocalOidContextA({'number': 5})), oid_specs={'1.2.3': 5})

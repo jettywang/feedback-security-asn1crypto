@@ -603,6 +603,39 @@ class MySequence(Sequence):
     }
 ```
 
+### Local OID mappings
+
+The class-level `_oid_specs` registry is global. When several callers in the
+same process need different definitions for the same private OID, pass a local
+mapping to `load()` (or the constructor) instead of mutating the class:
+
+```python
+from asn1crypto import cms
+
+specs = {
+    cms.CMSAttribute: {
+        '1.3.6.1.4.1.99999.1': MyTenantAttributeValues,
+    },
+}
+attribute = cms.CMSAttribute.load(encoded, oid_specs=specs)
+```
+
+The mapping is snapshotted when the object is created. Later changes to the
+dict passed by the caller do not affect objects that already exist, and the
+class-level `_oid_specs` is never modified. The snapshot is carried by nested
+and lazily parsed values, including `copy()`/`deepcopy()` and re-encoding.
+OIDs that are not present in the mapping behave exactly as before, which means
+`Any`-based fields remain lazily parsed and their original bytes are preserved.
+
+Three mapping forms are accepted:
+
+ - `{SomeSequenceClass: {oid: Spec}}` - applies only to that class
+ - `{None: {oid: Spec}}` - applies to every `Sequence`
+ - `{oid: Spec}` - shorthand for a generic mapping
+
+Passing `oid_specs` is optional; omitting it keeps the existing public API and
+the class-level registries behave as they always have.
+
 ## Explicit and Implicit Tagging
 
 When working with `Sequence`, `Set` and `Choice` it is often necessary to

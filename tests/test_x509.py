@@ -3754,3 +3754,84 @@ class X509Tests(unittest.TestCase):
     def test_invalid_email_encoding(self):
         cert = self._load_cert("invalid_email_tag.pem")
         self.assertEqual('info@keyweb.de', cert.subject.native['email_address'])
+
+
+CERT_EXTENSION_OID = '1.3.6.1.4.1.44444.2.1'
+
+
+class TenantAExtensionValue(core.Sequence):
+    _fields = [
+        ('level', core.Integer),
+        ('note', core.UTF8String),
+    ]
+
+
+class TenantBExtensionValue(core.Sequence):
+    _fields = [
+        ('enabled', core.Boolean),
+        ('owner', core.UTF8String),
+    ]
+
+
+class LocalExtensionOidMappingTests(unittest.TestCase):
+
+    oid = CERT_EXTENSION_OID
+
+    def _extension(self, der):
+        return x509.Extension.load(der)
+
+    def _der(self, value, value_class):
+        extension = x509.Extension({
+            'extn_id': self.oid,
+            'extn_value': core.ParsableOctetString(parsed=value),
+        }, oid_specs={x509.Extension: {self.oid: value_class}})
+        return extension.dump()
+
+    def test_interleaved_tenants_use_local_extensions(self):
+        der_a = self._der(TenantAExtensionValue({'level': 2, 'note': 'a'}), TenantAExtensionValue)
+        der_b = self._der(TenantBExtensionValue({'enabled': True, 'owner': 'b'}), TenantBExtensionValue)
+        specs_a = {x509.Extension: {self.oid: TenantAExtensionValue}}
+        specs_b = {x509.Extension: {self.oid: TenantBExtensionValue}}
+
+        ext_a = x509.Extension.load(der_a, oid_specs=specs_a)
+        ext_b = x509.Extension.load(der_b, oid_specs=specs_b)
+        self.assertIsInstance(ext_a['extn_value'].parsed, TenantAExtensionValue)
+        self.assertIsInstance(ext_b['extn_value'].parsed, TenantBExtensionValue)
+
+        # Overwriting the external mapping does not affect created objects
+        specs_a[x509.Extension][self.oid] = TenantBExtensionValue
+        self.assertIsInstance(ext_a['extn_value'].parsed, TenantAExtensionValue)
+        self.assertEqual(2, ext_a['extn_value'].parsed['level'].native)
+
+    def test_lazy_parsed_value_keeps_context(self):
+        der = self._der(TenantAExtensionValue({'level': 2, 'note': 'a'}), TenantAExtensionValue)
+        specs = {x509.Extension: {self.oid: TenantAExtensionValue}}
+        ext = x509.Extension.load(der, oid_specs=specs)
+        specs[x509.Extension][self.oid] = TenantBExtensionValue
+        self.assertIsInstance(ext['extn_value'].parsed, TenantAExtensionValue)
+
+    def test_extension_copy_and_reencode(self):
+        der = self._der(TenantBExtensionValue({'enabled': True, 'owner': 'b'}), TenantBExtensionValue)
+        specs = {x509.Extension: {self.oid: TenantBExtensionValue}}
+        ext = x509.Extension.load(der, oid_specs=specs)
+        specs[x509.Extension][self.oid] = TenantAExtensionValue
+
+        copied = ext.copy()
+        self.assertIsInstance(copied['extn_value'].parsed, TenantBExtensionValue)
+        self.assertEqual(der, copied.dump())
+        self.assertEqual(der, copied.dump(force=True))
+
+    def test_unknown_extension_oid_preserves_bytes(self):
+        der = self._der(TenantAExtensionValue({'level': 2, 'note': 'a'}), TenantAExtensionValue)
+        ext = x509.Extension.load(der)
+        self.assertEqual(der, ext.dump())
+        self.assertEqual(der, ext.dump(force=True))
+
+        before = dict(x509.Extension._oid_specs)
+        loaded = x509.Extension.load(
+            der,
+            oid_specs={x509.Extension: {self.oid: TenantAExtensionValue}}
+        )
+        self.assertIsInstance(loaded['extn_value'].parsed, TenantAExtensionValue)
+        self.assertEqual(before, x509.Extension._oid_specs)
+        self.assertNotIn(self.oid, x509.Extension._oid_specs)

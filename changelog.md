@@ -1,5 +1,13 @@
 # changelog
 
+## Unreleased
+
+ - Added an optional `oid_specs` argument to `core.load()` and `load()` on
+   `Asn1Value` subclasses, allowing callers to supply local OID to spec
+   mappings without modifying class-level registries. The mapping is
+   snapshotted per object tree, survives lazy parsing and copies, and leaves
+   unknown OIDs encoded exactly as they were.
+
 ## 1.5.1
 
  - Handle RSASSA-PSS in `keys.PrivateKeyInfo.bit_size` and

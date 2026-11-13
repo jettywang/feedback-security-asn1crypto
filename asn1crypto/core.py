@@ -112,7 +112,174 @@ _OID_RE = re.compile(r'^\d+(\.\d+)*$')
 _SETUP_CLASSES = {}
 
 
-def load(encoded_data, strict=False):
+class _OidContext(object):
+    """
+    An immutable snapshot of caller-supplied OID to spec mappings. Instances
+    are attached to parsed objects so that later, lazy parsing is not affected
+    by changes to the dict that was originally handed to the parse entry
+    point.
+    """
+
+    __slots__ = ('_specs',)
+
+    def __init__(self, specs=None):
+        """
+        :param specs:
+            None, or a dict. Keys may be:
+
+             - An Asn1Value class, with the value being a dict of OID values to
+               Asn1Value classes. The mapping then only applies to instances of
+               that class.
+             - None, with the value being a dict of OID values to Asn1Value
+               classes. The mapping then applies to every Sequence instance.
+             - A unicode string OID, with the value being an Asn1Value class.
+               This is equivalent to a generic mapping of that single OID.
+
+            Nested dicts are copied so later changes by the caller do not
+            affect objects that have already been created.
+        """
+
+        if specs is None:
+            specs = {}
+
+        if not isinstance(specs, dict):
+            raise TypeError(unwrap(
+                '''
+                oid_specs must be a dict, not %s
+                ''',
+                type_name(specs)
+            ))
+
+        generic = {}
+        by_class = {}
+        has_grouped = False
+        has_flat = False
+
+        for key, value in specs.items():
+            if key is None or (isinstance(key, type) and issubclass(key, Asn1Value)):
+                if not isinstance(value, dict):
+                    raise TypeError(unwrap(
+                        '''
+                        oid_specs values for class keys must be dicts, not %s
+                        ''',
+                        type_name(value)
+                    ))
+                if key is None:
+                    generic.update(value)
+                else:
+                    by_class.setdefault(key, {}).update(value)
+                has_grouped = True
+                continue
+
+            if isinstance(key, str_cls):
+                if not (isinstance(value, type) and issubclass(value, Asn1Value)):
+                    raise TypeError(unwrap(
+                        '''
+                        oid_specs values for OID keys must be Asn1Value classes,
+                        not %s
+                        ''',
+                        type_name(value)
+                    ))
+                generic[key] = value
+                has_flat = True
+                continue
+
+            raise TypeError(unwrap(
+                '''
+                oid_specs keys must be Asn1Value classes, None or unicode OID
+                strings, not %s
+                ''',
+                type_name(key)
+            ))
+
+        if has_grouped and has_flat:
+            raise ValueError(
+                'oid_specs may not mix class-grouped mappings with plain OID mappings'
+            )
+
+        copied = {}
+        if generic:
+            copied[None] = generic
+        for key, value in by_class.items():
+            copied[key] = value
+        self._specs = copied
+
+    @property
+    def generic_specs(self):
+        """
+        :return:
+            None, or a dict of OID values to Asn1Value classes that apply to
+            every Sequence subclass
+        """
+
+        return self._specs.get(None)
+
+    def specs_for(self, value_class):
+        """
+        :param value_class:
+            An Asn1Value class
+
+        :return:
+            None, or a dict of OID values to Asn1Value classes registered
+            specifically for the class. The dict is shared with this context
+            and must not be modified.
+        """
+
+        return self._specs.get(value_class)
+
+    def __bool__(self):
+        return bool(self._specs)
+
+    __nonzero__ = __bool__
+
+
+def _oid_context_from(kwargs, key):
+    """
+    Consumes a local OID mapping keyword argument and converts it to an
+    _OidContext instance.
+
+    :param kwargs:
+        A dict of keyword arguments passed to a load() implementation
+
+    :param key:
+        The keyword argument name to consume
+
+    :return:
+        None, or an _OidContext instance
+    """
+
+    specs = kwargs.pop(key, None)
+    if specs is None or isinstance(specs, _OidContext):
+        return specs
+    return _OidContext(specs)
+
+
+def _with_oid_specs(params, context):
+    """
+    Returns a dict of spec params with an optional OID context attached
+
+    :param params:
+        None, or a dict of spec params
+
+    :param context:
+        None, or an _OidContext instance
+
+    :return:
+        None, or a new dict of spec params
+    """
+
+    if context is None:
+        return params
+    if params is None:
+        return {'oid_specs': context}
+    if 'oid_specs' in params:
+        return params
+    combined = dict(params)
+    combined['oid_specs'] = context
+    return combined
+
+
+def load(encoded_data, strict=False, oid_specs=None):
     """
     Loads a BER/DER-encoded byte string and construct a universal object based
     on the tag value:
@@ -153,6 +320,12 @@ def load(encoded_data, strict=False):
         A boolean indicating if trailing data should be forbidden - if so, a
         ValueError will be raised when trailing data exists
 
+    :param oid_specs:
+        None, or a dict with keys being Asn1Value classes and values being
+        dicts that map OID values to Asn1Value classes. The mapping applies
+        to the returned value tree and does not modify any class-level
+        registry. See Sequence._oid_specs for the class-level equivalent.
+
     :raises:
         ValueError - when strict is True and trailing data is present
         ValueError - when the encoded value tag a tag other than listed above
@@ -163,7 +336,7 @@ def load(encoded_data, strict=False):
         An instance of the one of the universal classes
     """
 
-    return Asn1Value.load(encoded_data, strict=strict)
+    return Asn1Value.load(encoded_data, strict=strict, oid_specs=oid_specs)
 
 
 def unpickle_helper(asn1crypto_cls, der_bytes):
@@ -213,6 +386,31 @@ class Asn1Value(object):
     # some classes since they utilize _bytes or _unicode
     _native = None
 
+    # An optional _OidContext instance supplying local OID to spec mappings
+    # for this object and any objects created from it. This exists to allow
+    # multiple callers to use different definitions for the same OID without
+    # modifying class-level registries such as _oid_specs.
+    _oid_context = None
+
+    def _set_oid_context(self, context):
+        """
+        Attaches a local OID context to this object. Subclasses may use this
+        hook to derive instance-local lookup tables from it.
+
+        :param context:
+            None, or an _OidContext instance
+        """
+
+        self._oid_context = context
+
+    def _has_oid_context(self):
+        """
+        :return:
+            A boolean indicating if a local OID context is in use
+        """
+
+        return self._oid_context is not None
+
     @classmethod
     def load(cls, encoded_data, strict=False, **kwargs):
         """
@@ -225,6 +423,12 @@ class Asn1Value(object):
             A boolean indicating if trailing data should be forbidden - if so, a
             ValueError will be raised when trailing data exists
 
+        :param oid_specs:
+            None, or a dict with keys being Asn1Value classes and values being
+            dicts that map OID values to Asn1Value classes. The mapping is
+            snapshotted and applies to this value and everything parsed from
+            it, but does not modify any class-level registry.
+
         :return:
             An instance of the current class
         """
@@ -232,15 +436,29 @@ class Asn1Value(object):
         if not isinstance(encoded_data, byte_cls):
             raise TypeError('encoded_data must be a byte string, not %s' % type_name(encoded_data))
 
+        oid_context = None
+        oid_specs = kwargs.pop('oid_specs', None)
+        if oid_specs is not None:
+            if isinstance(oid_specs, _OidContext):
+                oid_context = oid_specs
+            else:
+                oid_context = _OidContext(oid_specs)
+
         spec = None
         if cls.tag is not None:
             spec = cls
 
-        value, _ = _parse_build(encoded_data, spec=spec, spec_params=kwargs, strict=strict)
+        value, _ = _parse_build(
+            encoded_data,
+            spec=spec,
+            spec_params=kwargs,
+            strict=strict,
+            oid_context=oid_context
+        )
         return value
 
     def __init__(self, explicit=None, implicit=None, no_explicit=False, tag_type=None, class_=None, tag=None,
-                 optional=None, default=None, contents=None, method=None):
+                 optional=None, default=None, contents=None, method=None, oid_specs=None):
         """
         The optional parameter is not used, but rather included so we don't
         have to delete it from the parameter dictionary when passing as keyword
@@ -291,11 +509,22 @@ class Asn1Value(object):
              - "primitive" or 0
              - "constructed" or 1
 
+        :param oid_specs:
+            None, or a dict with keys being Asn1Value classes and values being
+            dicts that map OID values to Asn1Value classes. The mapping only
+            applies to this object and objects created from it, and never
+            modifies the class-level _oid_specs of any class. A key of None
+            provides a fallback mapping for every class.
+
         :raises:
             ValueError - when implicit, explicit, tag_type, class_ or tag are invalid values
         """
 
         try:
+            if oid_specs is not None and not isinstance(oid_specs, _OidContext):
+                oid_specs = _OidContext(oid_specs)
+            self._set_oid_context(oid_specs)
+
             if self.__class__ not in _SETUP_CLASSES:
                 cls = self.__class__
                 # Allow explicit to be specified as a simple 2-element tuple
@@ -509,6 +738,7 @@ class Asn1Value(object):
         new_obj.tag = self.tag
         new_obj.implicit = self.implicit
         new_obj.explicit = self.explicit
+        new_obj._set_oid_context(self._oid_context)
         return new_obj
 
     def __copy__(self):
@@ -606,6 +836,7 @@ class Asn1Value(object):
 
         self.contents = other.contents
         self._native = copy_func(other._native)
+        self._set_oid_context(other._oid_context)
 
     def debug(self, nest_level=1):
         """
@@ -759,7 +990,12 @@ class Constructable(object):
 
         while pointer < contents_len:
             # We pass the current class as the spec so content semantics are preserved
-            sub_value, pointer = _parse_build(self.contents, pointer, spec=self.__class__)
+            sub_value, pointer = _parse_build(
+                self.contents,
+                pointer,
+                spec=self.__class__,
+                oid_context=self._oid_context
+            )
             if output is None:
                 output = sub_value._merge_chunks()
             else:
@@ -903,6 +1139,8 @@ class Any(Asn1Value):
                         type_name(value)
                     ))
 
+                if self._oid_context is not None:
+                    value._set_oid_context(self._oid_context)
                 self._parsed = (value, value.__class__, None)
                 self.contents = value.dump()
 
@@ -970,7 +1208,8 @@ class Any(Asn1Value):
                 parsed_value, _ = _parse_build(
                     contents,
                     spec=spec,
-                    spec_params=passed_params
+                    spec_params=passed_params,
+                    oid_context=self._oid_context
                 )
                 self._parsed = (parsed_value, spec, spec_params)
 
@@ -988,6 +1227,19 @@ class Any(Asn1Value):
                 e.args = (e.args[0] + '\n    while parsing %s' % type_name(self),) + args
                 raise e
         return self._parsed[0]
+
+    def _set_oid_context(self, context):
+        """
+        Attaches a local OID context and propagates it to an already parsed
+        value.
+
+        :param context:
+            None, or an _OidContext instance
+        """
+
+        Asn1Value._set_oid_context(self, context)
+        if self._parsed is not None and context is not None:
+            self._parsed[0]._set_oid_context(context)
 
     def _copy(self, other, copy_func):
         """
@@ -1076,7 +1328,14 @@ class Choice(Asn1Value):
         if not isinstance(encoded_data, byte_cls):
             raise TypeError('encoded_data must be a byte string, not %s' % type_name(encoded_data))
 
-        value, _ = _parse_build(encoded_data, spec=cls, spec_params=kwargs, strict=strict)
+        oid_context = _oid_context_from(kwargs, 'oid_specs')
+        value, _ = _parse_build(
+            encoded_data,
+            spec=cls,
+            spec_params=kwargs,
+            strict=strict,
+            oid_context=oid_context
+        )
         return value
 
     def _setup(self):
@@ -1169,9 +1428,11 @@ class Choice(Asn1Value):
                 _, spec, params = self._alternatives[self._choice]
 
                 if not isinstance(value, spec):
-                    value = spec(value, **params)
+                    value = spec(value, **_with_oid_specs(params, self._oid_context))
                 else:
                     value = _fix_tagging(value, params)
+                if self._oid_context is not None:
+                    value._set_oid_context(self._oid_context)
                 self._parsed = value
 
         except (ValueError, TypeError) as e:
@@ -1221,7 +1482,12 @@ class Choice(Asn1Value):
         if self._parsed is None:
             try:
                 _, spec, params = self._alternatives[self._choice]
-                self._parsed, _ = _parse_build(self._contents, spec=spec, spec_params=params)
+                self._parsed, _ = _parse_build(
+                    self._contents,
+                    spec=spec,
+                    spec_params=params,
+                    oid_context=self._oid_context
+                )
             except (ValueError, TypeError) as e:
                 args = e.args[1:]
                 e.args = (e.args[0] + '\n    while parsing %s' % type_name(self),) + args
@@ -1320,6 +1586,19 @@ class Choice(Asn1Value):
 
         return '[%s %s]' % (CLASS_NUM_TO_NAME_MAP[class_].upper(), tag)
 
+    def _set_oid_context(self, context):
+        """
+        Attaches a local OID context and propagates it to an already parsed
+        alternative.
+
+        :param context:
+            None, or an _OidContext instance
+        """
+
+        Asn1Value._set_oid_context(self, context)
+        if self._parsed is not None and context is not None:
+            self._parsed._set_oid_context(context)
+
     def _copy(self, other, copy_func):
         """
         Copies the contents of another Choice object to itself
@@ -1373,10 +1652,23 @@ class Concat(object):
     # A list of the specs of the concatenated values
     _child_specs = None
 
+    # An optional _OidContext instance applied to the child values
+    _oid_context = None
+
+    def _set_oid_context(self, context):
+        """
+        Attaches a local OID context to this object
+
+        :param context:
+            None, or an _OidContext instance
+        """
+
+        self._oid_context = context
+
     _children = None
 
     @classmethod
-    def load(cls, encoded_data, strict=False):
+    def load(cls, encoded_data, strict=False, oid_specs=None):
         """
         Loads a BER/DER-encoded byte string using the current class as the spec
 
@@ -1387,13 +1679,17 @@ class Concat(object):
             A boolean indicating if trailing data should be forbidden - if so, a
             ValueError will be raised when trailing data exists
 
+        :param oid_specs:
+            None, or a dict of local OID to spec mappings, as accepted by
+            Asn1Value.load()
+
         :return:
             A Concat object
         """
 
-        return cls(contents=encoded_data, strict=strict)
+        return cls(contents=encoded_data, strict=strict, oid_specs=oid_specs)
 
-    def __init__(self, value=None, contents=None, strict=False):
+    def __init__(self, value=None, contents=None, strict=False, oid_specs=None):
         """
         :param value:
             A native Python datatype to initialize the object value with
@@ -1405,10 +1701,17 @@ class Concat(object):
             A boolean indicating if trailing data should be forbidden - if so, a
             ValueError will be raised when trailing data exists in contents
 
+        :param oid_specs:
+            None, or a dict of local OID to spec mappings, as accepted by
+            Asn1Value.load()
+
         :raises:
             ValueError - when an error occurs with one of the children
             TypeError - when an error occurs with one of the children
         """
+        if oid_specs is not None and not isinstance(oid_specs, _OidContext):
+            oid_specs = _OidContext(oid_specs)
+        self._set_oid_context(oid_specs)
 
         if contents is not None:
             try:
@@ -1418,9 +1721,14 @@ class Concat(object):
                 offset = 0
                 for spec in self._child_specs:
                     if offset < contents_len:
-                        child_value, offset = _parse_build(contents, pointer=offset, spec=spec)
+                        child_value, offset = _parse_build(
+                            contents,
+                            pointer=offset,
+                            spec=spec,
+                            oid_context=self._oid_context
+                        )
                     else:
-                        child_value = spec()
+                        child_value = spec(oid_specs=self._oid_context)
                     self._children.append(child_value)
 
                 if strict and offset != contents_len:
@@ -1483,7 +1791,7 @@ class Concat(object):
             A new shallow copy of the Concat object
         """
 
-        new_obj = self.__class__()
+        new_obj = self.__class__(oid_specs=self._oid_context)
         new_obj._copy(self, copy.copy)
         return new_obj
 
@@ -1498,7 +1806,7 @@ class Concat(object):
             A new deep copy of the Concat object and all child objects
         """
 
-        new_obj = self.__class__()
+        new_obj = self.__class__(oid_specs=self._oid_context)
         memo[id(self)] = new_obj
         new_obj._copy(self, copy.deepcopy)
         return new_obj
@@ -2757,6 +3065,8 @@ class ParsableOctetString(Constructable, Castable, Primitive):
         Primitive.__init__(self, value=value, **kwargs)
 
         if set_parsed:
+            if self._oid_context is not None:
+                parsed._set_oid_context(self._oid_context)
             self._parsed = (parsed, parsed.__class__, None)
 
     def set(self, value):
@@ -2804,7 +3114,12 @@ class ParsableOctetString(Constructable, Castable, Primitive):
         """
 
         if self._parsed is None or self._parsed[1:3] != (spec, spec_params):
-            parsed_value, _ = _parse_build(self.__bytes__(), spec=spec, spec_params=spec_params)
+            parsed_value, _ = _parse_build(
+                self.__bytes__(),
+                spec=spec,
+                spec_params=spec_params,
+                oid_context=self._oid_context
+            )
             self._parsed = (parsed_value, spec, spec_params)
         return self._parsed[0]
 
@@ -2829,6 +3144,19 @@ class ParsableOctetString(Constructable, Castable, Primitive):
         """
 
         return self.__bytes__()
+
+    def _set_oid_context(self, context):
+        """
+        Attaches a local OID context and propagates it to an already parsed
+        value.
+
+        :param context:
+            None, or an _OidContext instance
+        """
+
+        Asn1Value._set_oid_context(self, context)
+        if self._parsed is not None and context is not None:
+            self._parsed[0]._set_oid_context(context)
 
     def _copy(self, other, copy_func):
         """
@@ -3391,7 +3719,8 @@ class Sequence(Asn1Value):
             The default value if no value is specified
         """
 
-        Asn1Value.__init__(self, **kwargs)
+        oid_context = _oid_context_from(kwargs, 'oid_specs')
+        Asn1Value.__init__(self, oid_specs=oid_context, **kwargs)
 
         check_existing = False
         if value is None and default is not None:
@@ -3494,6 +3823,32 @@ class Sequence(Asn1Value):
 
         return mutated
 
+    def _set_oid_context(self, context):
+        """
+        Attaches a local OID context, deriving an instance-level _oid_specs
+        overlay so the class-level registry is never modified.
+
+        :param context:
+            None, or an _OidContext instance
+        """
+
+        self._oid_context = context
+        self.__dict__.pop('_oid_specs', None)
+        if context is None:
+            return
+
+        generic_specs = context.generic_specs
+        class_specs = context.specs_for(self.__class__)
+        if generic_specs is None and class_specs is None:
+            return
+
+        merged = dict(self._oid_specs or {})
+        if generic_specs:
+            merged.update(generic_specs)
+        if class_specs:
+            merged.update(class_specs)
+        self._oid_specs = merged
+
     def _lazy_child(self, index):
         """
         Builds a child object if the child has only been parsed into a tuple so far
@@ -3501,7 +3856,7 @@ class Sequence(Asn1Value):
 
         child = self.children[index]
         if child.__class__ == tuple:
-            child = self.children[index] = _build(*child)
+            child = self.children[index] = _build(*child, oid_context=self._oid_context)
         return child
 
     def __len__(self):
@@ -3825,7 +4180,7 @@ class Sequence(Asn1Value):
                     type_name(value_spec)
                 ))
             if is_tuple or is_dict:
-                value = value_spec(value)
+                value = value_spec(value, **_with_oid_specs({}, self._oid_context))
             if not isinstance(value, value_spec):
                 wrapper = value_spec()
                 wrapper.validate(value.class_, value.tag, value.contents)
@@ -3849,7 +4204,7 @@ class Sequence(Asn1Value):
                     type_name(value_spec),
                     type_name(value)
                 ))
-            new_value = value_spec(value, **field_params)
+            new_value = value_spec(value, **_with_oid_specs(field_params, self._oid_context))
 
         else:
             if isinstance(value, value_spec):
@@ -3864,7 +4219,7 @@ class Sequence(Asn1Value):
                         type_name(value_spec),
                         type_name(value)
                     ))
-                new_value = value_spec(value)
+                new_value = value_spec(value, **_with_oid_specs({}, self._oid_context))
 
             # For when the field is OctetString or OctetBitString with embedded
             # values we need to wrap the value in the field spec to get the
@@ -3873,6 +4228,9 @@ class Sequence(Asn1Value):
                 wrapper = field_spec(value=new_value.dump(), **field_params)
                 wrapper._parsed = (new_value, new_value.__class__, None)
                 new_value = wrapper
+
+        if self._oid_context is not None and new_value is not VOID:
+            new_value._set_oid_context(self._oid_context)
 
         new_value = _fix_tagging(new_value, field_params)
 
@@ -3984,7 +4342,7 @@ class Sequence(Asn1Value):
                     child = parts
 
                 if recurse:
-                    child = _build(*child)
+                    child = _build(*child, oid_context=self._oid_context)
                     if isinstance(child, (Sequence, SequenceOf)):
                         child._parse_children(recurse=True)
 
@@ -4073,7 +4431,7 @@ class Sequence(Asn1Value):
                 self._native = OrderedDict()
                 for index, child in enumerate(self.children):
                     if child.__class__ == tuple:
-                        child = _build(*child)
+                        child = _build(*child, oid_context=self._oid_context)
                         self.children[index] = child
                     try:
                         name = self._fields[index][0]
@@ -4208,7 +4566,8 @@ class SequenceOf(Asn1Value):
         if spec:
             self._child_spec = spec
 
-        Asn1Value.__init__(self, **kwargs)
+        oid_context = _oid_context_from(kwargs, 'oid_specs')
+        Asn1Value.__init__(self, oid_specs=oid_context, **kwargs)
 
         try:
             if contents is not None:
@@ -4276,7 +4635,7 @@ class SequenceOf(Asn1Value):
 
         child = self.children[index]
         if child.__class__ == tuple:
-            child = _build(*child)
+            child = _build(*child, oid_context=self._oid_context)
             self.children[index] = child
         return child
 
@@ -4326,7 +4685,10 @@ class SequenceOf(Asn1Value):
             new_value = value
 
         else:
-            return self._child_spec(value=value)
+            return self._child_spec(value=value, **_with_oid_specs({}, self._oid_context))
+
+        if self._oid_context is not None:
+            new_value._set_oid_context(self._oid_context)
 
         params = {}
         if self._child_spec.explicit:
@@ -4518,7 +4880,7 @@ class SequenceOf(Asn1Value):
                 else:
                     child = parts
                 if recurse:
-                    child = _build(*child)
+                    child = _build(*child, oid_context=self._oid_context)
                     if isinstance(child, (Sequence, SequenceOf)):
                         child._parse_children(recurse=True)
                 self.children.append(child)
@@ -4722,7 +5084,7 @@ class Set(Sequence):
                     child = parts + (field_spec, field_params)
 
                 if recurse:
-                    child = _build(*child)
+                    child = _build(*child, oid_context=self._oid_context)
                     if isinstance(child, (Sequence, SequenceOf)):
                         child._parse_children(recurse=True)
 
@@ -5435,7 +5797,8 @@ _UNIVERSAL_SPECS = {
 }
 
 
-def _build(class_, method, tag, header, contents, trailer, spec=None, spec_params=None, nested_spec=None):
+def _build(class_, method, tag, header, contents, trailer, spec=None, spec_params=None, nested_spec=None,
+           oid_context=None):
     """
     Builds an Asn1Value object generically, or using a spec with optional params
 
@@ -5472,6 +5835,10 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
         contents can be further parsed and interpreted as another Asn1Value.
         This parameter controls the spec for that sub-parsing.
 
+    :param oid_context:
+        None, or an _OidContext instance to attach to the built value so that
+        dynamic OID spec lookups stay local to the object tree.
+
     :return:
         An object of the type spec, or if not specified, a child of Asn1Value
     """
@@ -5494,6 +5861,7 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
                 value = spec(**spec_params)
             else:
                 value = spec()
+            value._set_oid_context(oid_context)
             original_explicit = value.explicit
             explicit_info = reversed(original_explicit)
             parsed_class = class_
@@ -5540,7 +5908,7 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
                     explicit_header += parsed_header
                     explicit_trailer = parsed_trailer + explicit_trailer
 
-            value = _build(*info, spec=spec, spec_params={'no_explicit': True})
+            value = _build(*info, spec=spec, spec_params={'no_explicit': True}, oid_context=oid_context)
             value._header = explicit_header
             value._trailer = explicit_trailer
             value.explicit = original_explicit
@@ -5550,6 +5918,7 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
                 value = spec(contents=contents, **spec_params)
             else:
                 value = spec(contents=contents)
+            value._set_oid_context(oid_context)
 
             if spec is Any:
                 pass
@@ -5623,7 +5992,7 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
             _, _, _, parsed_header, to_parse, parsed_trailer = info
             explicit_header += parsed_header
             explicit_trailer = parsed_trailer + explicit_trailer
-        value = _build(*info, spec=spec, spec_params={'no_explicit': True})
+        value = _build(*info, spec=spec, spec_params={'no_explicit': True}, oid_context=oid_context)
         value._header = header + value._header
         value._trailer += trailer or b''
         value.explicit = original_explicit
@@ -5645,6 +6014,7 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
         spec = _UNIVERSAL_SPECS[tag]
 
         value = spec(contents=contents, class_=class_)
+        value._set_oid_context(oid_context)
         ber_indef = method == 1 and value.method == 0 and trailer == b'\x00\x00'
         if ber_indef and isinstance(value, Constructable):
             value._indefinite = True
@@ -5668,7 +6038,7 @@ def _build(class_, method, tag, header, contents, trailer, spec=None, spec_param
     return value
 
 
-def _parse_build(encoded_data, pointer=0, spec=None, spec_params=None, strict=False):
+def _parse_build(encoded_data, pointer=0, spec=None, spec_params=None, strict=False, oid_context=None):
     """
     Parses a byte string generically, or using a spec with optional params
 
@@ -5692,6 +6062,9 @@ def _parse_build(encoded_data, pointer=0, spec=None, spec_params=None, strict=Fa
         A boolean indicating if trailing data should be forbidden - if so, a
         ValueError will be raised when trailing data exists
 
+    :param oid_context:
+        None, or an _OidContext instance to attach to the parsed value
+
     :return:
         A 2-element tuple:
          - 0: An object of the type spec, or if not specified, a child of Asn1Value
@@ -5703,4 +6076,4 @@ def _parse_build(encoded_data, pointer=0, spec=None, spec_params=None, strict=Fa
     if strict and new_pointer != pointer + encoded_len:
         extra_bytes = pointer + encoded_len - new_pointer
         raise ValueError('Extra data - %d bytes of trailing data were provided' % extra_bytes)
-    return (_build(*info, spec=spec, spec_params=spec_params), new_pointer)
+    return (_build(*info, spec=spec, spec_params=spec_params, oid_context=oid_context), new_pointer)

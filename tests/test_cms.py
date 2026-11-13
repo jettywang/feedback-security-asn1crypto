@@ -7,7 +7,7 @@ import zlib
 import sys
 from datetime import datetime
 
-from asn1crypto import cms, util
+from asn1crypto import cms, core, util
 from ._unittest_compat import patch
 
 patch()
@@ -1039,3 +1039,136 @@ class CMSTests(unittest.TestCase):
             'recipient_key_id',
             old_sekp.name,
         )
+
+
+TENANT_OID = '1.3.6.1.4.1.44444.1.1'
+
+
+class TenantAValue(core.Sequence):
+    _fields = [
+        ('approved', core.Boolean),
+        ('level', core.Integer),
+    ]
+
+
+class TenantBValue(core.Sequence):
+    _fields = [
+        ('label', core.UTF8String),
+        ('granted', core.GeneralizedTime),
+    ]
+
+
+class SetOfTenantAValue(core.SetOf):
+    _child_spec = TenantAValue
+
+
+class SetOfTenantBValue(core.SetOf):
+    _child_spec = TenantBValue
+
+
+class LocalOidMappingTests(unittest.TestCase):
+
+    oid = TENANT_OID
+
+    def _attribute(self, value_set):
+        return cms.CMSAttribute(
+            {
+                'type': self.oid,
+                'values': value_set,
+            },
+            oid_specs={cms.CMSAttribute: {self.oid: value_set.__class__}}
+        )
+
+    def _der(self, value_set):
+        return self._attribute(value_set).dump()
+
+    def _tenant_a_der(self):
+        return self._der(SetOfTenantAValue([
+            TenantAValue({'approved': True, 'level': 4})
+        ]))
+
+    def _tenant_b_der(self):
+        return self._der(SetOfTenantBValue([
+            TenantBValue({
+                'label': 'tenant-b',
+                'granted': '20200102030405Z',
+            })
+        ]))
+
+    def test_interleaved_tenants_keep_local_definitions(self):
+        der_a = self._tenant_a_der()
+        der_b = self._tenant_b_der()
+        specs_a = {cms.CMSAttribute: {self.oid: SetOfTenantAValue}}
+        specs_b = {cms.CMSAttribute: {self.oid: SetOfTenantBValue}}
+
+        attr_a = cms.CMSAttribute.load(der_a, oid_specs=specs_a)
+        attr_b = cms.CMSAttribute.load(der_b, oid_specs=specs_b)
+
+        self.assertIsInstance(attr_a['values'], SetOfTenantAValue)
+        self.assertIsInstance(attr_a['values'][0], TenantAValue)
+        self.assertIsInstance(attr_b['values'], SetOfTenantBValue)
+        self.assertIsInstance(attr_b['values'][0], TenantBValue)
+
+        # Reading the same OID again for the first tenant must not disturb
+        # the object created for the second tenant
+        second_a = cms.CMSAttribute.load(der_a, oid_specs=specs_a)
+        self.assertIsInstance(second_a['values'], SetOfTenantAValue)
+        self.assertIsInstance(attr_b['values'][0], TenantBValue)
+        self.assertEqual('tenant-b', attr_b['values'][0]['label'].native)
+
+    def test_caller_mapping_is_snapshotted(self):
+        der = self._tenant_a_der()
+        specs = {cms.CMSAttribute: {self.oid: SetOfTenantAValue}}
+        attr = cms.CMSAttribute.load(der, oid_specs=specs)
+
+        # Mutate the caller's mapping after parsing
+        specs[cms.CMSAttribute][self.oid] = SetOfTenantBValue
+
+        self.assertIsInstance(attr['values'], SetOfTenantAValue)
+        self.assertIsInstance(attr['values'][0], TenantAValue)
+        self.assertTrue(attr['values'][0]['approved'].native)
+
+        fresh = cms.CMSAttribute.load(der, oid_specs=specs)
+        self.assertIsInstance(fresh['values'], SetOfTenantBValue)
+
+    def test_lazy_access_uses_creation_context(self):
+        der = self._tenant_a_der()
+        specs = {cms.CMSAttribute: {self.oid: SetOfTenantAValue}}
+        attr = cms.CMSAttribute.load(der, oid_specs=specs)
+
+        # Replace the mapping before the values field is touched
+        specs[cms.CMSAttribute][self.oid] = SetOfTenantBValue
+
+        self.assertIsInstance(attr['values'], SetOfTenantAValue)
+        self.assertIsInstance(attr['values'][0], TenantAValue)
+
+    def test_copy_and_reencode_preserve_context(self):
+        der = self._tenant_b_der()
+        specs = {cms.CMSAttribute: {self.oid: SetOfTenantBValue}}
+        attr = cms.CMSAttribute.load(der, oid_specs=specs)
+
+        specs[cms.CMSAttribute][self.oid] = SetOfTenantAValue
+
+        copied = attr.copy()
+        self.assertIsInstance(copied['values'], SetOfTenantBValue)
+        self.assertEqual(der, copied.dump())
+        self.assertEqual(der, copied.dump(force=True))
+
+    def test_unknown_oid_keeps_raw_encoding(self):
+        der = self._tenant_a_der()
+        attr = cms.CMSAttribute.load(der)
+
+        self.assertIsInstance(attr['values'], cms.SetOfAny)
+        self.assertEqual(der, attr.dump())
+        self.assertEqual(der, attr.dump(force=True))
+
+        # Ensure the class-level registry was not touched by local mappings
+        self.assertNotIn(self.oid, cms.CMSAttribute._oid_specs)
+
+    def test_class_level_registry_untouched(self):
+        before = dict(cms.CMSAttribute._oid_specs)
+        specs = {cms.CMSAttribute: {self.oid: SetOfTenantAValue}}
+        attr = cms.CMSAttribute.load(self._tenant_a_der(), oid_specs=specs)
+        self.assertIsInstance(attr['values'], SetOfTenantAValue)
+        self.assertEqual(before, cms.CMSAttribute._oid_specs)
+        self.assertNotIn(self.oid, cms.CMSAttribute._oid_specs)

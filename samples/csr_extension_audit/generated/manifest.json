@@ -1,0 +1,56 @@
+[
+  {
+    "der_file": "01_baseline_wellformed.der",
+    "der_length": 675,
+    "der_sha256": "f9079bbdef792957af43a17706389d96c38a786225f7b995e26acfa2b55561f7",
+    "description": "control: single extensionRequest, single value, unique OIDs",
+    "name": "01_baseline_wellformed",
+    "pem_file": "01_baseline_wellformed.pem",
+    "self_signature_valid": true
+  },
+  {
+    "der_file": "02_dup_attribute.der",
+    "der_length": 751,
+    "der_sha256": "d1fe43248a7a801d0a234d48a498d3a44c2800b9b6738fe7ecc7460ab1880bb2",
+    "description": "two sibling extensionRequest attributes make conflicting claims",
+    "name": "02_dup_attribute",
+    "pem_file": "02_dup_attribute.pem",
+    "self_signature_valid": true
+  },
+  {
+    "der_file": "03_multi_value.der",
+    "der_length": 713,
+    "der_sha256": "032ac6bfd70fcb25132b6b6076a530f0a0c5e9041496444273e9fd6c9e9842e5",
+    "description": "one extensionRequest attribute whose SET contains two Extensions values",
+    "name": "03_multi_value",
+    "pem_file": "03_multi_value.pem",
+    "self_signature_valid": true
+  },
+  {
+    "der_file": "04_dup_extnid.der",
+    "der_length": 707,
+    "der_sha256": "18bd8f9b83781d0609890c4a0da3b628cdb9256a70b6241b2efca3f0bfdb74e2",
+    "description": "one Extensions value repeats basicConstraints and subjectAltName",
+    "name": "04_dup_extnid",
+    "pem_file": "04_dup_extnid.pem",
+    "self_signature_valid": true
+  },
+  {
+    "der_file": "05_ms_and_standard.der",
+    "der_length": 943,
+    "der_sha256": "c3635428a23a84fe221bca3fdda47ea903225550900c23aa47c4398135784259",
+    "description": "Microsoft enrollment attributes plus a standard extensionRequest",
+    "name": "05_ms_and_standard",
+    "pem_file": "05_ms_and_standard.pem",
+    "self_signature_valid": true
+  },
+  {
+    "der_file": "06_unknown_critical.der",
+    "der_length": 667,
+    "der_sha256": "310e375b1ead9994dea98d03c564cb107583634a1be7c85e29994b56b5e116d5",
+    "description": "critical extension at an OID absent from ExtensionId._map",
+    "name": "06_unknown_critical",
+    "pem_file": "06_unknown_critical.pem",
+    "self_signature_valid": true
+  }
+]

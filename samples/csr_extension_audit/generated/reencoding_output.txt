@@ -1,0 +1,6 @@
+received attribute order : ['1.2.840.113549.1.9.14', '1.2.840.113549.1.9.14']
+plain dump identical     : True
+force dump identical     : True
+after mutation, order    : ['1.2.840.113549.1.9.7', '1.2.840.113549.1.9.14', '1.2.840.113549.1.9.14']
+extensionRequest count   : 2
+challenge attr present   : True

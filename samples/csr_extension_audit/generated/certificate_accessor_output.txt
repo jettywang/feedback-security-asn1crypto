@@ -1,0 +1,6 @@
+encoded extension count       : 4
+basic_constraints_value.ca    : True
+basic_constraints path_len    : 2
+subject_alt_name_value        : ['evil.example']
+critical_extensions           : ['basic_constraints', 'subject_alt_name']
+-> first, constrained leaf claim is gone; last claim wins silently

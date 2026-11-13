@@ -1,0 +1,106 @@
+==============================================================================
+SAMPLE 01_baseline_wellformed
+  control: single extensionRequest, single value, unique OIDs
+  self-signature valid: True (signature only proves key possession)
+  CRI attributes in encoded order:
+    - 1.2.840.113549.1.9.14 (extension_request)
+  extensionRequest #1: 1 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '2.5.29.17']
+  re-encoding: identical=True; SET OF order after force-dump: ['1.2.840.113549.1.9.14']
+  STRICT EXTRACTOR: accepted, 2 extension(s) with provenance:
+    [0] oid=2.5.29.19 name=basic_constraints critical=True known_semantics=True
+    [1] oid=2.5.29.17 name=subject_alt_name critical=False known_semantics=True
+  ANTI-PATTERN flatten_last_wins -> bc={'ca': False, 'critical': True} san={'critical': False, 'names': ['baseline.example']}
+  ANTI-PATTERN first_attribute_only -> 2 extension(s), bc present=True
+  ANTI-PATTERN native_dict_squash -> 2 surviving OID key(s): ['basic_constraints', 'subject_alt_name']
+==============================================================================
+SAMPLE 02_dup_attribute
+  two sibling extensionRequest attributes make conflicting claims
+  self-signature valid: True (signature only proves key possession)
+  CRI attributes in encoded order:
+    - 1.2.840.113549.1.9.14 (extension_request)
+    - 1.2.840.113549.1.9.14 (extension_request)
+  extensionRequest #1: 1 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '2.5.29.17']
+  extensionRequest #2: 1 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '2.5.29.17']
+  re-encoding: identical=True; SET OF order after force-dump: ['1.2.840.113549.1.9.14', '1.2.840.113549.1.9.14']
+  STRICT EXTRACTOR: REJECT -> CSR contains 2 extensionRequest attributes; RFC 5272-style processing needs exactly one. Reject instead of merging.
+  ANTI-PATTERN flatten_last_wins -> bc={'ca': True, 'critical': True, 'path_len': 0} san={'critical': True, 'names': ['internal.example', 'corp.example']}
+  ANTI-PATTERN first_attribute_only -> 2 extension(s), bc present=True
+  ANTI-PATTERN native_dict_squash -> 2 surviving OID key(s): ['basic_constraints', 'subject_alt_name']
+==============================================================================
+SAMPLE 03_multi_value
+  one extensionRequest attribute whose SET contains two Extensions values
+  self-signature valid: True (signature only proves key possession)
+  CRI attributes in encoded order:
+    - 1.2.840.113549.1.9.14 (extension_request)
+  extensionRequest #1: 2 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '2.5.29.17']
+    value[1] extnIDs = ['2.5.29.19', '2.5.29.37']
+  re-encoding: identical=True; SET OF order after force-dump: ['1.2.840.113549.1.9.14']
+  STRICT EXTRACTOR: REJECT -> extensionRequest attribute contains 2 Extensions values in its SET; exactly one is permitted.
+  ANTI-PATTERN flatten_last_wins -> bc={'ca': True, 'critical': True} san={'critical': False, 'names': ['only.example']}
+  ANTI-PATTERN first_attribute_only -> 2 extension(s), bc present=True
+  ANTI-PATTERN native_dict_squash -> 3 surviving OID key(s): ['basic_constraints', 'extended_key_usage', 'subject_alt_name']
+==============================================================================
+SAMPLE 04_dup_extnid
+  one Extensions value repeats basicConstraints and subjectAltName
+  self-signature valid: True (signature only proves key possession)
+  CRI attributes in encoded order:
+    - 1.2.840.113549.1.9.14 (extension_request)
+  extensionRequest #1: 1 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '2.5.29.17', '2.5.29.19', '2.5.29.17']
+    !! duplicate OID 2.5.29.19 at positions [0, 2]
+    !! duplicate OID 2.5.29.17 at positions [1, 3]
+  re-encoding: identical=True; SET OF order after force-dump: ['1.2.840.113549.1.9.14']
+  STRICT EXTRACTOR: REJECT -> extension OID 2.5.29.19 appears more than once within the Extensions SEQUENCE (first duplicate at index 2).
+  ANTI-PATTERN flatten_last_wins -> bc={'ca': True, 'critical': False, 'path_len': 2} san={'critical': True, 'names': ['evil.example']}
+  ANTI-PATTERN first_attribute_only -> 4 extension(s), bc present=True
+  ANTI-PATTERN native_dict_squash -> 2 surviving OID key(s): ['basic_constraints', 'subject_alt_name']
+==============================================================================
+SAMPLE 05_ms_and_standard
+  Microsoft enrollment attributes plus a standard extensionRequest
+  self-signature valid: True (signature only proves key possession)
+  CRI attributes in encoded order:
+    - 1.3.6.1.4.1.311.13.2.3 (microsoft_os_version)
+    - 1.3.6.1.4.1.311.21.20 (microsoft_request_client_info)
+    - 1.3.6.1.4.1.311.13.2.2 (microsoft_enrollment_csp_provider)
+    - 1.2.840.113549.1.9.14 (extension_request)
+  extensionRequest #1: 1 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '2.5.29.17', '1.3.6.1.4.1.311.20.2']
+  re-encoding: identical=True; SET OF order after force-dump: ['1.3.6.1.4.1.311.13.2.3', '1.3.6.1.4.1.311.21.20', '1.3.6.1.4.1.311.13.2.2', '1.2.840.113549.1.9.14']
+  STRICT EXTRACTOR: accepted, 3 extension(s) with provenance:
+    [0] oid=2.5.29.19 name=basic_constraints critical=True known_semantics=True
+    [1] oid=2.5.29.17 name=subject_alt_name critical=True known_semantics=True
+    [2] oid=1.3.6.1.4.1.311.20.2 name=microsoft_enroll_certtype critical=False known_semantics=True
+  non-extensionRequest attributes (applicant metadata only):
+    - 1.3.6.1.4.1.311.13.2.3 (microsoft_os_version)
+    - 1.3.6.1.4.1.311.21.20 (microsoft_request_client_info)
+    - 1.3.6.1.4.1.311.13.2.2 (microsoft_enrollment_csp_provider)
+  ANTI-PATTERN flatten_last_wins -> bc={'ca': True, 'critical': True} san={'critical': True, 'names': ['windows.host.example.net', 'dc.corp.example']}
+  ANTI-PATTERN first_attribute_only -> 3 extension(s), bc present=True
+  ANTI-PATTERN native_dict_squash -> 3 surviving OID key(s): ['basic_constraints', 'microsoft_enroll_certtype', 'subject_alt_name']
+==============================================================================
+SAMPLE 06_unknown_critical
+  critical extension at an OID absent from ExtensionId._map
+  self-signature valid: True (signature only proves key possession)
+  CRI attributes in encoded order:
+    - 1.2.840.113549.1.9.14 (extension_request)
+  extensionRequest #1: 1 Extensions value(s) in SET
+    value[0] extnIDs = ['2.5.29.19', '1.3.6.1.4.1.99999.7.1']
+  re-encoding: identical=True; SET OF order after force-dump: ['1.2.840.113549.1.9.14']
+  STRICT EXTRACTOR: accepted, 2 extension(s) with provenance:
+    [0] oid=2.5.29.19 name=basic_constraints critical=True known_semantics=True
+    [1] oid=1.3.6.1.4.1.99999.7.1 name=None critical=True known_semantics=False
+  ANTI-PATTERN flatten_last_wins -> bc={'ca': False, 'critical': True} san=None
+  ANTI-PATTERN first_attribute_only -> 2 extension(s), bc present=True
+  ANTI-PATTERN native_dict_squash -> 2 surviving OID key(s): ['1.3.6.1.4.1.99999.7.1', 'basic_constraints']
+==============================================================================
+SUMMARY (strict contract vs. silent merge)
+  01_baseline_wellformed     ACCEPT-STRUCTURE   naive_bc={'ca': False, 'critical': True}
+  02_dup_attribute           REJECT-AMBIGUOUS   naive_bc={'ca': True, 'critical': True, 'path_len': 0}
+  03_multi_value             REJECT-AMBIGUOUS   naive_bc={'ca': True, 'critical': True}
+  04_dup_extnid              REJECT-AMBIGUOUS   naive_bc={'ca': True, 'critical': False, 'path_len': 2}
+  05_ms_and_standard         ACCEPT-STRUCTURE   naive_bc={'ca': True, 'critical': True}
+  06_unknown_critical        ACCEPT-STRUCTURE   naive_bc={'ca': False, 'critical': True}
